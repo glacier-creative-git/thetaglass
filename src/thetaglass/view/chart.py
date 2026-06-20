@@ -15,10 +15,11 @@ Pure: each takes a Position dict + snapshot history, returns an ANSI string.
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone
 
 import plotille
+
+from thetaglass.state.baseline import expected_pl_pct
 
 # rgb line colors (plotille color_mode="rgb")
 C_UNDER = (90, 200, 250)     # underlying price — cyan
@@ -26,7 +27,7 @@ C_PROFIT = (95, 200, 120)    # profit edge / max profit — green
 C_LOSS = (215, 95, 95)       # loss edge / max loss — red
 C_BE = (230, 205, 95)        # break-even — amber
 C_REAL = (120, 230, 150)     # realized P/L — bright green
-C_SQRT = (235, 205, 95)      # √time on-track (cone top) — amber
+C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
 C_ZERO = (110, 110, 120)     # break-even / reference — grey
 C_CONE = (140, 140, 155)     # forward projection cone — dim grey
@@ -92,16 +93,29 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     fig.x_label = "days to exp"
     fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
-    n = 48
-    xs = [dte0 * i / n for i in range(n + 1)]
-    fig.plot([0, dte0], [0, 0], lc=C_ZERO, label="break-even")
-    fig.plot(xs, [-max_loss * (x / dte0) for x in xs], lc=C_WORST, label="max-loss")
-    # √time on-track is now the TOP of the cone (the linear max-profit line is gone, which
-    # de-clutters the dense left edge where every line converges on $0 at open).
-    fig.plot(xs, [max_profit * (1 - math.sqrt(max(0.0, (dte0 - x) / dte0))) for x in xs],
-             lc=C_SQRT, label="√time on-track")
-
     ys = [h["pl_dollars"] for h in history if h.get("pl_dollars") is not None]
+    realized_now = ys[-1] if ys else (pos.get("pl_dollars") or 0.0)
+
+    fig.plot([0, dte0], [0, 0], lc=C_ZERO, label="break-even")
+
+    # The cone is a FORECAST, so it starts at NOW (anchored to the current realized value)
+    # and fans to expiration — NOT from open. That leaves the realized line alone on the
+    # left edge, fully visible, instead of buried under three lines converging on $0.
+    if now_x < dte0:
+        n = 48
+        xs_f = [now_x + (dte0 - now_x) * i / n for i in range(n + 1)]
+        e_now = expected_pl_pct(dte0 - now_x, dte0)
+        denom = (1.0 - e_now) or 1.0
+        # top: √time path from where we are now up to max profit at expiry
+        top = [realized_now + (max_profit - realized_now) *
+               ((expected_pl_pct(dte0 - x, dte0) - e_now) / denom) for x in xs_f]
+        # bottom: linear bleed from here down to max loss at expiry
+        bot = [realized_now + (-max_loss - realized_now) *
+               ((x - now_x) / (dte0 - now_x)) for x in xs_f]
+        fig.plot(xs_f, bot, lc=C_WORST, label="max-loss")
+        fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
+
+    # realized P/L: open → NOW (the only line left of NOW), drawn last so it sits on top
     if ys:
         fig.plot(xs_real[:len(ys)], ys, lc=C_REAL, label="realized P/L")
 
