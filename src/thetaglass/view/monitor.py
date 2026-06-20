@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from thetaglass.view.cards import render_position_card
@@ -31,9 +32,14 @@ class PositionItem(ListItem):
 
 
 class MonitorApp(App):
+    # Charts sit side-by-side: each gets the full height (≈2× the vertical braille
+    # resolution of a stacked split), so the cone edges separate into their own cells.
+    # TODO(adaptive): on narrow terminals (< ~110 cols) each cell gets cramped; could
+    # switch to a stacked layout below a width breakpoint. Stubbed for now.
     CSS = """
-    #pnl   { height: 2fr; border: round $accent; padding: 0 1; }
-    #under { height: 2fr; border: round $accent; padding: 0 1; }
+    #charts { height: 3fr; }
+    #pnl   { width: 1fr; height: 100%; border: round $accent; padding: 0 1; }
+    #under { width: 1fr; height: 100%; border: round $accent; padding: 0 1; }
     #plist { height: 1fr; min-height: 6; border: round $accent; }
     PositionItem { padding: 0 1; height: auto; }
     ListView > PositionItem.--highlight { background: $boost; }
@@ -48,8 +54,9 @@ class MonitorApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Static(id="pnl")
-        yield Static(id="under")
+        with Horizontal(id="charts"):
+            yield Static(id="pnl")
+            yield Static(id="under")
         yield ListView(*[PositionItem(e) for e in self.entries], id="plist")
         yield Footer()
 
