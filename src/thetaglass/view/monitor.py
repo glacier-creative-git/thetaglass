@@ -18,7 +18,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import (render_iv_rv_chart, render_pnl_chart,
+from thetaglass.view.chart import (render_iv_chart, render_pnl_chart,
                                     render_underlying_chart)
 
 # entry = (position_dict, history_rows, underlying_closes)
@@ -77,7 +77,7 @@ class MonitorApp(App):
         self.title = "Thetaglass — theta-decay monitor"
         self.query_one("#pnl", Static).border_title = "Position P/L"
         self.query_one("#under", Static).border_title = "Underlying"
-        self.query_one("#ivrv", Static).border_title = "IV vs RV"
+        self.query_one("#ivrv", Static).border_title = "Implied Vol vs entry"
         self.query_one("#empty", Static).border_title = "—"
         self.query_one("#plist", ListView).border_title = "Positions  (↑/↓ select · q quit)"
         plist = self.query_one("#plist", ListView)
@@ -98,11 +98,11 @@ class MonitorApp(App):
         if not self.entries:
             return
         self.current_idx = idx
-        pos, hist, closes = self.entries[idx]
+        pos, hist, _closes = self.entries[idx]
         pnl = self._draw("#pnl", render_pnl_chart, pos, hist)
         und = self._draw("#under", render_underlying_chart, pos, hist)
-        ivrv = self._draw("#ivrv", render_iv_rv_chart, pos, hist, closes)
-        self.current_chart_text = pnl + und + ivrv
+        iv = self._draw("#ivrv", render_iv_chart, pos, hist)
+        self.current_chart_text = pnl + und + iv
 
     def _draw(self, sel: str, fn, *args) -> str:
         w = self.query_one(sel, Static)

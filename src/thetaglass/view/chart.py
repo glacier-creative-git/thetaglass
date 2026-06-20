@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 import plotille
 
 from thetaglass.state.baseline import expected_pl_pct
-from thetaglass.state.volatility import DEFAULT_WINDOW, realized_vol, rv_series
 
 # rgb line colors (plotille color_mode="rgb")
 C_UNDER = (90, 200, 250)     # underlying price — cyan
@@ -32,9 +31,9 @@ C_BACKFILL = (95, 150, 245)  # estimated pre-watch P/L (linear bridge) — blue
 C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
 C_CONE = (140, 140, 155)     # forward projection cone — dim grey
-C_IV = (205, 130, 235)       # implied volatility — magenta
-C_RV = (235, 165, 80)        # realized volatility — orange
-C_IVENTRY = (130, 110, 150)  # IV at entry reference — dim purple
+C_IV_GOOD = (95, 205, 130)   # IV below entry — vol falling, good for the seller — green
+C_IV_BAD = (220, 100, 100)   # IV above entry — vega working against you — red
+C_IVENTRY = (150, 150, 165)  # IV-at-entry reference line — grey
 
 
 def _parse(ts: str) -> datetime:
@@ -195,64 +194,57 @@ def render_underlying_chart(pos: dict, history: list[dict],
     return title + "\n " + key + "\n" + fig.show()
 
 
-# ------------------------------------------------------------------------ IV / RV
+# ----------------------------------------------------------- implied volatility
 
 def _day_of(open_dt: datetime, d: str) -> float:
     return (_parse(d) - open_dt).total_seconds() / 86400.0
 
 
-def render_iv_rv_chart(pos: dict, history: list[dict],
-                       closes: list[tuple[str, float]],
-                       width: int = 90, height: int = 16,
-                       window: int = DEFAULT_WINDOW) -> str:
-    """Implied vol (forward, from our option snapshots) vs realized vol (backward, from
-    the underlying's actual moves). Same units (annualized %), so they overlay on one Y.
+def render_iv_chart(pos: dict, history: list[dict],
+                    width: int = 90, height: int = 16) -> str:
+    """Implied volatility since we opened, vs the IV we sold at.
 
-    `closes` is the (date, close) series for the underlying (real bars, or — as a fallback
-    for demos/new positions — the underlying_price from snapshot history)."""
+    When you SELL options you want IV to fall: below entry (green) the premium is bleeding
+    out in your favor; above entry (red) vega is working against you — your short options
+    can gain value even if the underlying cooperates. That vega story is the whole point,
+    and it needs only data we have (per-tick IV + iv_at_entry) — no horizon-matching, no
+    historical option IV (which isn't recoverable anyway)."""
     open_dt = _parse(pos["opened_at"])
     dte0 = pos.get("dte_at_open") or 1
-
-    # IV series from snapshots (forward-only: we can't recover historical option IV)
-    iv_x, iv_y = [], []
-    for h in history:
-        iv = h.get("iv_now")
-        if iv is not None:
-            iv_x.append(_day_of(open_dt, h["tick_at"]))
-            iv_y.append(iv * 100)
-    iv_now = iv_y[-1] if iv_y else (pos.get("iv_now") or 0) * 100
     iv_entry = (pos.get("iv_at_entry") or 0) * 100
 
-    # RV series from underlying closes (real, can extend back before open)
-    rv = rv_series(closes, window) if closes else []
-    rv_x = [_day_of(open_dt, d) for d, _ in rv]
-    rv_y = [v * 100 for _, v in rv]
-    # keep only the position's life on the shared DTE axis (day 0 → expiry)
-    rv_pts = [(x, y) for x, y in zip(rv_x, rv_y) if 0 <= x <= dte0]
-    rv_now = realized_vol([c for _, c in closes], window) if closes else None
-    rv_now_pct = rv_now * 100 if rv_now is not None else None
+    pts = [(_day_of(open_dt, h["tick_at"]), h["iv_now"] * 100)
+           for h in history if h.get("iv_now") is not None]
+    iv_now = pts[-1][1] if pts else (pos.get("iv_now") or 0) * 100
 
-    allv = iv_y + [y for _, y in rv_pts] + ([iv_entry] if iv_entry else [])
-    lo, hi = (min(allv), max(allv)) if allv else (0, 50)
-    pad = (hi - lo) * 0.15 or 5.0
+    allv = [y for _, y in pts] + ([iv_entry] if iv_entry else [iv_now])
+    lo, hi = min(allv), max(allv)
+    pad = (hi - lo) * 0.25 + 2.0
 
-    fig = _new_fig(width, height, dte0, "vol %")
+    fig = _new_fig(width, height, dte0, "IV %")
     fig.set_y_limits(min_=max(0, lo - pad), max_=hi + pad)
     fig.x_label = "days to exp"
     fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
+    # the line you sold at — everything is read relative to this
     if iv_entry:
-        fig.plot([0, dte0], [iv_entry, iv_entry], lc=C_IVENTRY, label="IV@entry")
-    if rv_pts:
-        fig.plot([x for x, _ in rv_pts], [y for _, y in rv_pts], lc=C_RV, label="RV")
-    if iv_x:
-        fig.plot(iv_x, iv_y, lc=C_IV, label="IV")
+        fig.plot([0, dte0], [iv_entry, iv_entry], lc=C_IVENTRY)
 
-    prem = (iv_now - rv_now_pct) if (rv_now_pct is not None) else None
-    prem_txt = (f"  premium {prem:+.0f}pts ({'rich' if prem >= 0 else 'cheap'})"
-                if prem is not None else "")
-    title = (f" IV vs RV (annualized)   IV {iv_now:.0f}%   "
-             f"RV{window}d {rv_now_pct:.0f}%" if rv_now_pct is not None
-             else f" IV vs RV (annualized)   IV {iv_now:.0f}%   RV n/a")
-    key = _key(("IV (implied)", C_IV), ("RV (realized)", C_RV), ("IV@entry", C_IVENTRY))
-    return title + prem_txt + "\n " + key + "\n" + fig.show()
+    # IV path, colored per segment: green below entry (good), red above (bad)
+    for i in range(1, len(pts)):
+        (x0, y0), (x1, y1) = pts[i - 1], pts[i]
+        good = (y0 + y1) / 2 <= iv_entry
+        fig.plot([x0, x1], [y0, y1], lc=C_IV_GOOD if good else C_IV_BAD)
+    if len(pts) == 1:                                   # a single sighting → a dot
+        x0, y0 = pts[0]
+        fig.plot([x0, x0], [y0, y0], lc=C_IV_GOOD if y0 <= iv_entry else C_IV_BAD)
+
+    delta = iv_now - iv_entry
+    verdict = ("vol ≈ flat" if abs(delta) < 0.5
+               else "vol DOWN — premium decaying" if delta < 0
+               else "vol UP — vega against you")
+    title = (f" IMPLIED VOL vs entry   now {iv_now:.0f}%   entry {iv_entry:.0f}%   "
+             f"Δ {delta:+.0f}pts   {verdict}")
+    key = _key(("IV < entry (good)", C_IV_GOOD), ("IV > entry (bad)", C_IV_BAD),
+               ("IV@entry", C_IVENTRY))
+    return title + "\n " + key + "\n" + fig.show()

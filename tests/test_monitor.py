@@ -12,7 +12,7 @@ from rich.console import Console
 from thetaglass.mock import MOCK_PREFIX, closes_from_history, make_mock_book, make_mock_position
 from thetaglass.state.volatility import realized_vol, rv_series
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import render_iv_rv_chart, render_pnl_chart, render_underlying_chart
+from thetaglass.view.chart import render_iv_chart, render_pnl_chart, render_underlying_chart
 from thetaglass.view.monitor import MonitorApp
 
 BRAILLE = range(0x2800, 0x28FF + 1)
@@ -90,12 +90,12 @@ def test_realized_vol_is_annualized():
     assert realized_vol([100.0, 101.0], window=20) is None  # too little data
 
 
-def test_iv_rv_chart_renders():
+def test_iv_chart_renders_vs_entry():
     pos, hist = make_mock_position(synced_after=4)
-    closes = closes_from_history(hist)
-    s = render_iv_rv_chart(pos, hist, closes, width=90, height=16)
-    assert "IV vs RV" in s
-    assert "IV (implied)" in s and "RV (realized)" in s     # the color key
+    s = render_iv_chart(pos, hist, width=90, height=16)
+    assert "IMPLIED VOL vs entry" in s
+    assert "IV < entry (good)" in s and "IV > entry (bad)" in s   # the green/red key
+    assert "IV@entry" in s
     assert _has_braille(s)
 
 
