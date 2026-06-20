@@ -22,15 +22,14 @@ import plotille
 from thetaglass.state.baseline import expected_pl_pct
 
 # rgb line colors (plotille color_mode="rgb")
-C_UNDER = (90, 200, 250)     # underlying price — cyan
-C_PROFIT = (95, 200, 120)    # profit edge / max profit — green
-C_LOSS = (215, 95, 95)       # loss edge / max loss — red
-C_BE = (230, 205, 95)        # break-even — amber
+C_UNDER = (80, 150, 245)     # underlying daily-close price — blue
+C_PROFIT = (95, 200, 120)    # profit edge (short strike) — green
+C_LOSS = (215, 95, 95)       # max-loss edge (long strike) — red
+C_BE_GREY = (155, 155, 170)  # break-even — grey
 C_REAL = (120, 230, 150)     # realized P/L — bright green
 C_BACKFILL = (95, 150, 245)  # estimated pre-watch P/L (linear bridge) — blue
 C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
-C_CONE = (140, 140, 155)     # forward projection cone — dim grey
 C_IV_GOOD = (95, 205, 130)   # IV below entry — vol falling, good for the seller — green
 C_IV_BAD = (220, 100, 100)   # IV above entry — vega working against you — red
 C_IVENTRY = (150, 150, 165)  # IV-at-entry reference line — grey
@@ -149,48 +148,59 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
 # -------------------------------------------------------------------- underlying
 
 def render_underlying_chart(pos: dict, history: list[dict],
+                            closes: list[tuple[str, float]],
                             width: int = 90, height: int = 16) -> str:
-    _, dte0, xs_real, now_x = _context(pos, history)
+    """The underlying's REAL daily-close price (blue) against the three levels that decide
+    the trade: profit edge (short strike, green), max-loss edge (long strike, red), and
+    break-even (grey). Unlike P/L and IV, the underlying's pre-watch history is real and
+    backfillable — so the line is just the true price, no estimated bridge."""
+    open_dt = _parse(pos["opened_at"])
+    dte0 = pos.get("dte_at_open") or 1
     legs = pos["legs"]
     short = next((l for l in legs if l["side"] == "short"), legs[0])
     long = next((l for l in legs if l["side"] == "long"), None)
     is_put = short["option_type"] == "put"
 
-    prices = [h["underlying_price"] for h in history if h.get("underlying_price") is not None]
-    spot = prices[-1] if prices else (pos.get("underlying_price") or short["strike"])
+    # real daily closes from open onward, plus the live spot so the line reaches NOW. The
+    # open-day bar is timestamped 00:00 (before an intraday fill), so filter by DATE and
+    # clamp that bar to day 0 rather than letting it fall negative and get dropped.
+    open_date = (pos.get("opened_at") or "")[:10]
+    pts = [(max(0.0, _day_of(open_dt, d)), c) for d, c in (closes or []) if d >= open_date]
+    now_x = dte0 - (pos.get("dte_remaining") or 0)
+    spot = pos.get("underlying_price")
+    if spot and (not pts or now_x > pts[-1][0] + 0.5):
+        pts.append((now_x, spot))
+    spot = spot or (pts[-1][1] if pts else short["strike"])
 
-    profit_k = short["strike"]                       # stay on the safe side of this → keep credit
+    profit_k = short["strike"]                       # stay on the safe side → keep the credit
     loss_k = long["strike"] if long else None        # past this → full max loss
     credit_ps = (pos.get("credit_received") or 0.0) / (100 * abs(short["quantity"] or 1))
     break_even = profit_k - credit_ps if is_put else profit_k + credit_ps
 
-    levels = [profit_k, spot] + ([loss_k] if loss_k else []) + [break_even]
+    levels = [profit_k, spot, break_even] + ([loss_k] if loss_k else [])
+    prices = [c for _, c in pts]
     lo, hi = min(levels + prices), max(levels + prices)
     pad = (hi - lo) * 0.12 or 1.0
 
     fig = _new_fig(width, height, dte0, "$")
     fig.set_y_limits(min_=lo - pad, max_=hi + pad)
+    fig.x_label = "days to exp"
+    fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
-    # outcome edges — the prices that decide the trade
-    fig.plot([0, dte0], [profit_k, profit_k], lc=C_PROFIT, label=f"profit edge {profit_k:g}")
+    # the three levels that decide the trade
+    fig.plot([0, dte0], [profit_k, profit_k], lc=C_PROFIT)
     if loss_k:
-        fig.plot([0, dte0], [loss_k, loss_k], lc=C_LOSS, label=f"max-loss edge {loss_k:g}")
-    fig.plot([0, dte0], [break_even, break_even], lc=C_BE, label=f"break-even {break_even:.2f}")
+        fig.plot([0, dte0], [loss_k, loss_k], lc=C_LOSS)
+    fig.plot([0, dte0], [break_even, break_even], lc=C_BE_GREY)
 
-    # forward cone: from today's price, project to each edge at expiration
-    if now_x < dte0:
-        fig.plot([now_x, dte0], [spot, profit_k], lc=C_CONE, label="cone → edges @ exp")
-        if loss_k:
-            fig.plot([now_x, dte0], [spot, loss_k], lc=C_CONE, label=" ")
-
-    # realized underlying price (left of NOW)
-    if prices:
-        fig.plot(xs_real[:len(prices)], prices, lc=C_UNDER, label=f"{pos['underlying']} price")
+    # the real price line (blue), drawn last so it sits on top of the levels
+    if pts:
+        fig.plot([x for x, _ in pts], prices, lc=C_UNDER)
 
     title = (f" UNDERLYING  {pos['underlying']}  spot ${spot:g}   "
              f"profit edge {profit_k:g}   break-even {break_even:.2f}")
     key = _key((f"{pos['underlying']} price", C_UNDER), ("profit edge", C_PROFIT),
-               ("max-loss edge", C_LOSS), ("break-even", C_BE), ("cone→exp", C_CONE))
+               ("max-loss edge", C_LOSS), ("break-even", C_BE_GREY))
     return title + "\n " + key + "\n" + fig.show()
 
 

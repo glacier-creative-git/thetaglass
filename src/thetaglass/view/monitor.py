@@ -98,9 +98,9 @@ class MonitorApp(App):
         if not self.entries:
             return
         self.current_idx = idx
-        pos, hist, _closes = self.entries[idx]
+        pos, hist, closes = self.entries[idx]
         pnl = self._draw("#pnl", render_pnl_chart, pos, hist)
-        und = self._draw("#under", render_underlying_chart, pos, hist)
+        und = self._draw("#under", render_underlying_chart, pos, hist, closes)
         iv = self._draw("#ivrv", render_iv_chart, pos, hist)
         self.current_chart_text = pnl + und + iv
 

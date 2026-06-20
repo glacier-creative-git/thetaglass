@@ -67,10 +67,10 @@ def test_pnl_chart_backfills_gap_in_blue():
 
 def test_underlying_chart_shows_edges():
     pos, hist = make_mock_position()
-    s = render_underlying_chart(pos, hist, width=90, height=18)
+    s = render_underlying_chart(pos, hist, closes_from_history(hist), width=90, height=18)
     assert _has_braille(s)
     assert "UNDERLYING" in s and pos["underlying"] in s
-    assert "profit edge" in s and "break-even" in s     # the outcome edges, not a flat strike
+    assert "profit edge" in s and "break-even" in s and "max-loss edge" in s   # the 3 levels
 
 
 def test_card_contains_key_metrics():
