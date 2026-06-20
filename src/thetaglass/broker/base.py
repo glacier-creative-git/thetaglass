@@ -55,3 +55,12 @@ class Broker(ABC):
     def get_equity_quotes(self, symbols: list[str]) -> list[dict]:
         """Underlying spot quotes. Needed for distance-to-short-strike; not in any
         options payload. Cheap and batchable across all distinct underlyings."""
+
+    @abstractmethod
+    def get_equity_historicals(self, symbol: str, start_time: str,
+                               interval: str = "day") -> list[dict]:
+        """Historical OHLC bars for one underlying from start_time (RFC3339) to now.
+
+        Used to backfill the real price history we weren't around to record, and to
+        compute realized volatility. Returns raw bar dicts (open/high/low/close/volume).
+        """

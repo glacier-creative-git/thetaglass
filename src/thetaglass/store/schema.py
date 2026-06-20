@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS positions_current (
     updated_at    TEXT
 );
 
+-- Real underlying OHLC history, backfilled from the broker. Feeds the underlying price
+-- line AND realized-volatility (RV). One row per (symbol, day); idempotent upsert.
+CREATE TABLE IF NOT EXISTS equity_bars (
+    symbol  TEXT,
+    d       TEXT,      -- ISO date
+    open    REAL,
+    high    REAL,
+    low     REAL,
+    close   REAL,
+    volume  INTEGER,
+    PRIMARY KEY (symbol, d)
+);
+
 -- The alert store. seq is the monotonic cursor that `peek` compares against.
 CREATE TABLE IF NOT EXISTS alerts (
     seq             INTEGER PRIMARY KEY AUTOINCREMENT,  -- the cursor

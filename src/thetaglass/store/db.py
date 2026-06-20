@@ -216,6 +216,38 @@ class Store:
         ).fetchall()
         return [json.loads(r["snapshot_json"]) for r in rows]
 
+    # --- equity history (backfilled underlying bars) ----------------------
+
+    def upsert_equity_bars(self, symbol: str, bars: list[dict]) -> int:
+        """Persist raw broker OHLC bars for a symbol (idempotent per day)."""
+        rows = []
+        for b in bars:
+            d = (b.get("begins_at") or "")[:10]
+            if not d:
+                continue
+            rows.append((symbol, d, _f(b.get("open_price")), _f(b.get("high_price")),
+                         _f(b.get("low_price")), _f(b.get("close_price")), b.get("volume")))
+        self.conn.executemany(
+            """INSERT OR REPLACE INTO equity_bars
+               (symbol, d, open, high, low, close, volume) VALUES (?,?,?,?,?,?,?)""", rows)
+        return len(rows)
+
+    def equity_closes(self, symbol: str, since: str | None = None) -> list[tuple[str, float]]:
+        """(date, close) series for a symbol, ascending — the input to RV and the real
+        underlying price line."""
+        sql = "SELECT d, close FROM equity_bars WHERE symbol=? AND close IS NOT NULL"
+        params: list = [symbol]
+        if since:
+            sql += " AND d >= ?"
+            params.append(since)
+        sql += " ORDER BY d"
+        return [(r["d"], r["close"]) for r in self.conn.execute(sql, params).fetchall()]
+
+    def latest_bar_date(self, symbol: str) -> str | None:
+        r = self.conn.execute("SELECT max(d) AS d FROM equity_bars WHERE symbol=?",
+                              (symbol,)).fetchone()
+        return r["d"] if r and r["d"] else None
+
     def last_tick_at(self) -> str | None:
         """The most recent snapshot time across all positions — the honest 'are we
         actually syncing' signal the supervisor and MCP report."""

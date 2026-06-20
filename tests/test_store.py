@@ -111,6 +111,22 @@ def test_last_tick_at_tracks_latest(store):
     assert store.last_tick_at() == "2026-06-18T20:05:00Z"
 
 
+def test_equity_bars_round_trip(store):
+    bars = [
+        {"begins_at": "2026-06-01T00:00:00Z", "open_price": "100", "high_price": "102",
+         "low_price": "99", "close_price": "101.5", "volume": 1000},
+        {"begins_at": "2026-06-02T00:00:00Z", "open_price": "101.5", "high_price": "103",
+         "low_price": "101", "close_price": "102.0", "volume": 1200},
+    ]
+    assert store.upsert_equity_bars("QQQ", bars) == 2
+    closes = store.equity_closes("QQQ")
+    assert closes == [("2026-06-01", 101.5), ("2026-06-02", 102.0)]
+    assert store.latest_bar_date("QQQ") == "2026-06-02"
+    # idempotent re-upsert (no duplicate rows)
+    store.upsert_equity_bars("QQQ", bars)
+    assert len(store.equity_closes("QQQ")) == 2
+
+
 def test_close_grace_window(store):
     pos = _qqq_spread()
     pid = pos.position_id

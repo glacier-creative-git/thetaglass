@@ -30,6 +30,9 @@ def tick(broker, store: Store, is_daily_close: bool = False) -> int:
     """
     positions = assemble_positions(broker, store=store)
     store.record_tick(positions, is_daily_close=is_daily_close)
+    # Keep real underlying history fresh (feeds the price line + realized vol).
+    from thetaglass.backfill import backfill_for_positions
+    backfill_for_positions(broker, store, positions)
     # TODO(watchdog): evaluate alert thresholds on `positions` here, inline, and insert
     # any transitions into the alerts table before we return. Next slice.
     log.info("tick: %d position(s)%s", len(positions),
