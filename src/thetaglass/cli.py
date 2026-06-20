@@ -9,7 +9,6 @@ import json
 
 import typer
 from rich import print as rprint
-from rich.table import Table
 
 from thetaglass.broker.robinhood.auth import AuthStore
 from thetaglass.broker.robinhood.client import RobinhoodBroker
@@ -233,34 +232,20 @@ def _dur(seconds: int | None) -> str:
 
 @app.command("status")
 def status():
-    """Show the latest persisted state of every open position (reads the store).
+    """The overview: a Gantt timeline of every open position (reads the store).
 
-    Minimal table for now — the Rich Gantt overview (Layer E1) is the next slice.
+    Each row spans [open → expiration] on a shared time axis — solid bar = elapsed
+    (colored by health), dashed tail = the decay runway ahead, with one NOW marker.
     """
+    from rich.console import Console
+
     from thetaglass.store import Store
+    from thetaglass.view import render_overview
 
     with Store() as store:
         rows = store.current_positions()
-    if not rows:
-        rprint("[yellow]No open positions in the store. Run `tg sync` first.[/yellow]")
-        return
-
-    table = Table(title="Thetaglass — open positions")
-    for col in ("underlying", "strategy", "P/L", "captured", "expected", "dist→K", "health"):
-        table.add_column(col)
-    for p in rows:
-        health = p.get("health_score")
-        color = "green" if (health or 0) >= 0.7 else "yellow" if (health or 0) >= 0.4 else "red"
-        table.add_row(
-            p.get("underlying", "?"),
-            p.get("strategy_type", "?"),
-            f"${p.get('pl_dollars')}",
-            _pct(p.get("pl_pct_of_max_profit")),
-            _pct(p.get("expected_pl_pct")),
-            _pct(p.get("distance_to_short_strike_pct")),
-            f"[{color}]{health}[/{color}]",
-        )
-    rprint(table)
+    console = Console()
+    console.print(render_overview(rows, width=console.width))
 
 
 def _pct(x: float | None) -> str:
