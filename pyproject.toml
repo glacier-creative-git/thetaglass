@@ -11,6 +11,9 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 tg = "thetaglass.cli:app"
 

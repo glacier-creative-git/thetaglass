@@ -85,6 +85,41 @@ def dump(
         rprint(f"\n[green]wrote raw payload to {raw_out}[/green]")
 
 
+@app.command("inspect")
+def inspect():
+    """Run the state-machine pipeline live and print each canonical Position.
+
+    No persistence yet — this validates Layers A–D against real broker data.
+    """
+    from thetaglass.state.assemble import assemble_positions
+
+    positions = assemble_positions(RobinhoodBroker())
+    if not positions:
+        rprint("[yellow]No open option positions found.[/yellow]")
+        return
+
+    for p in positions:
+        legs = " / ".join(
+            f"{l.side[0].upper()} {l.strike:g}{l.option_type[0].upper()}" for l in p.legs)
+        rprint(f"\n[bold cyan]{p.underlying} {p.strategy_type}[/bold cyan]  ({legs})")
+        rprint(f"  position_id      {p.position_id[:12]}…  acct {p.account_number}")
+        rprint(f"  opened           {p.opened_at}   DTE {p.dte_remaining}/{p.dte_at_open}")
+        rprint(f"  credit / maxloss ${p.credit_received}  /  ${p.max_loss}")
+        rprint(f"  current value    ${p.current_value}  →  P/L [bold]${p.pl_dollars}[/bold] "
+               f"({_pct(p.pl_pct_of_max_profit)} of max profit)")
+        rprint(f"  expected by now  {_pct(p.expected_pl_pct)}   "
+               f"→ {'AHEAD' if (p.pl_pct_of_max_profit or 0) >= (p.expected_pl_pct or 0) else 'BEHIND'}")
+        rprint(f"  underlying       ${p.underlying_price}   "
+               f"dist to short strike {_pct(p.distance_to_short_strike_pct)}")
+        rprint(f"  net greeks       Δ{p.net_delta} Γ{p.net_gamma} Θ{p.net_theta} V{p.net_vega}")
+        rprint(f"  IV now / entry   {p.iv_now} / {p.iv_at_entry}  (Δ {_pct(p.iv_regime_delta_pct)})")
+        rprint(f"  [bold]health {p.health_score}[/bold]  axes={p.health_axes}")
+
+
+def _pct(x: float | None) -> str:
+    return "—" if x is None else f"{x * 100:.1f}%"
+
+
 def _instrument_ids(positions: list[dict]) -> list[str]:
     """Best-effort scrape of option instrument ids off raw position legs.
 
