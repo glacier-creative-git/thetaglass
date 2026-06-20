@@ -26,9 +26,8 @@ C_PROFIT = (95, 200, 120)    # profit edge / max profit — green
 C_LOSS = (215, 95, 95)       # loss edge / max loss — red
 C_BE = (230, 205, 95)        # break-even — amber
 C_REAL = (120, 230, 150)     # realized P/L — bright green
-C_SQRT = (235, 205, 95)      # √time on-track — amber
-C_BEST = (95, 160, 110)      # linear → max profit — dim green
-C_WORST = (200, 115, 115)    # linear → max loss — dim red
+C_SQRT = (235, 205, 95)      # √time on-track (cone top) — amber
+C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
 C_ZERO = (110, 110, 120)     # break-even / reference — grey
 C_CONE = (140, 140, 155)     # forward projection cone — dim grey
 
@@ -88,12 +87,17 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     fig = _new_fig(width, height, dte0, "P/L $")
     fig.set_y_limits(min_=-max_loss * 1.1 if max_loss else -10,
                      max_=max_profit * 1.15 if max_profit else 10)
+    # X stays plotted as days-since-open (0→dte0) but READS as days-to-expiration: the
+    # leftmost tick is the DTE at open, the rightmost is 0. Data positions are unchanged.
+    fig.x_label = "days to exp"
+    fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
     n = 48
     xs = [dte0 * i / n for i in range(n + 1)]
     fig.plot([0, dte0], [0, 0], lc=C_ZERO, label="break-even")
-    fig.plot(xs, [max_profit * (x / dte0) for x in xs], lc=C_BEST, label="linear→max profit")
-    fig.plot(xs, [-max_loss * (x / dte0) for x in xs], lc=C_WORST, label="linear→max loss")
+    fig.plot(xs, [-max_loss * (x / dte0) for x in xs], lc=C_WORST, label="max-loss")
+    # √time on-track is now the TOP of the cone (the linear max-profit line is gone, which
+    # de-clutters the dense left edge where every line converges on $0 at open).
     fig.plot(xs, [max_profit * (1 - math.sqrt(max(0.0, (dte0 - x) / dte0))) for x in xs],
              lc=C_SQRT, label="√time on-track")
 
@@ -101,10 +105,11 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     if ys:
         fig.plot(xs_real[:len(ys)], ys, lc=C_REAL, label="realized P/L")
 
+    dte_now = dte0 - now_x
     title = (f" P/L (up = made money)    max profit ${max_profit:g}   "
-             f"max loss ${max_loss:g}   day {now_x:.0f}/{dte0}")
-    key = _key(("realized", C_REAL), ("on-track √t", C_SQRT),
-               ("linear max-profit", C_BEST), ("linear max-loss", C_WORST))
+             f"max loss ${max_loss:g}   DTE {dte_now:.0f}/{dte0}")
+    key = _key(("realized", C_REAL), ("on-track √t (cone top)", C_SQRT),
+               ("max-loss (cone bottom)", C_WORST))
     return title + "\n " + key + "\n" + fig.show()
 
 
