@@ -104,6 +104,13 @@ def test_instrument_cache_round_trips(store):
     assert got["S"]["type"] == "put"
 
 
+def test_last_tick_at_tracks_latest(store):
+    assert store.last_tick_at() is None                  # nothing synced yet
+    store.record_tick([_qqq_spread()], tick_at="2026-06-18T20:00:00Z")
+    store.record_tick([_qqq_spread()], tick_at="2026-06-18T20:05:00Z")
+    assert store.last_tick_at() == "2026-06-18T20:05:00Z"
+
+
 def test_close_grace_window(store):
     pos = _qqq_spread()
     pid = pos.position_id

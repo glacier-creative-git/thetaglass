@@ -216,6 +216,12 @@ class Store:
         ).fetchall()
         return [json.loads(r["snapshot_json"]) for r in rows]
 
+    def last_tick_at(self) -> str | None:
+        """The most recent snapshot time across all positions — the honest 'are we
+        actually syncing' signal the supervisor and MCP report."""
+        r = self.conn.execute("SELECT max(tick_at) AS t FROM snapshots").fetchone()
+        return r["t"] if r else None
+
     def position_row(self, position_id: str) -> dict | None:
         r = self.conn.execute(
             "SELECT * FROM positions WHERE position_id=?", (position_id,)

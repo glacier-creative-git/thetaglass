@@ -19,7 +19,7 @@ module.exports = {
       // The venv console-script is a real executable (shebang -> venv python), so we
       // run it directly rather than through a node/python interpreter.
       script: "./.venv/bin/tg",
-      args: "run",
+      args: "timekeeper run",
       interpreter: "none",
       cwd: "/home/elester/thetaglass",
       env: {

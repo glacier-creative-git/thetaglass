@@ -13,11 +13,15 @@ from rich.table import Table
 
 from thetaglass.broker.robinhood.auth import AuthStore
 from thetaglass.broker.robinhood.client import RobinhoodBroker
+from thetaglass.timekeeper import supervisor
 
 app = typer.Typer(no_args_is_help=True, add_completion=False,
                   help="Thetaglass — theta-decay watchdog for sold options.")
 auth_app = typer.Typer(no_args_is_help=True, help="Robinhood authentication.")
 app.add_typer(auth_app, name="auth")
+tk_app = typer.Typer(no_args_is_help=True,
+                     help="Timekeeper (Clock 1): the sync heartbeat and its PM2 supervision.")
+app.add_typer(tk_app, name="timekeeper")
 
 
 @auth_app.command("login")
@@ -140,20 +144,91 @@ def sync(
         rprint(f"  {p.underlying} {p.strategy_type}  health [bold]{p.health_score}[/bold]")
 
 
-@app.command("run")
-def run(
+@tk_app.command("run")
+def tk_run(
     once: bool = typer.Option(False, "--once", help="Run a single tick and exit "
                               "(fires regardless of market hours; for testing/cron)."),
 ):
-    """Start the Timekeeper heartbeat (Clock 1). PM2 supervises this in production.
+    """The raw worker loop — what PM2 (and Docker, as PID 1) actually execute.
 
-    While the market is open it syncs every TICK_SECONDS and appends history; when
-    closed it sleeps until the next session. State lives in the store, so it's safe to
-    restart at any time.
+    You usually want `tg timekeeper start` instead, which runs this under PM2 in the
+    background. While the market is open it syncs every TICK_SECONDS and appends
+    history; when closed it sleeps until the next session. State lives in the store, so
+    it's safe to restart at any time.
     """
     from thetaglass.timekeeper import run as run_timekeeper
 
     run_timekeeper(once=once)
+
+
+@tk_app.command("start")
+def tk_start():
+    """Launch the heartbeat under PM2 in the background (idempotent)."""
+    _render_supervisor(supervisor.start())
+
+
+@tk_app.command("stop")
+def tk_stop():
+    """Halt the heartbeat (stays registered with PM2 so `start` can revive it)."""
+    _render_supervisor(supervisor.stop())
+
+
+@tk_app.command("restart")
+def tk_restart():
+    """Restart the heartbeat — use after a code change."""
+    _render_supervisor(supervisor.restart())
+
+
+@tk_app.command("status")
+def tk_status():
+    """Is the daemon up, and when did it LAST actually sync (from the store)?"""
+    st = supervisor.status()
+    proc = st["process"]
+    pstatus = proc.get("status", "unknown")
+    color = "green" if pstatus == "online" else "red" if pstatus == "not_registered" else "yellow"
+    rprint(f"process     [{color}]{pstatus}[/{color}]"
+           + (f"  pid {proc['pid']}" if proc.get("pid") else "")
+           + (f"  up {_dur(proc['uptime_seconds'])}" if proc.get("uptime_seconds") else "")
+           + (f"  ↺ {proc['restarts']}" if proc.get("restarts") is not None else ""))
+    rprint(f"last tick   {st['last_tick_at'] or '[dim]never[/dim]'}")
+    rprint(f"open pos.   {st['open_positions'] if st['open_positions'] is not None else '—'}")
+    if not st["pm2_available"]:
+        rprint("[yellow]PM2 not on PATH — `npm install -g pm2` to supervise.[/yellow]")
+
+
+@tk_app.command("logs")
+def tk_logs(
+    follow: bool = typer.Option(True, "--follow/--no-follow", help="Stream (Ctrl-C to exit)."),
+    lines: int = typer.Option(40, "--lines", help="Lines of history to show first."),
+):
+    """Tail the Timekeeper's PM2 logs."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("pm2"):
+        rprint("[red]PM2 not found on PATH.[/red] Install with: npm install -g pm2")
+        raise typer.Exit(1)
+    args = ["pm2", "logs", supervisor.APP_NAME, "--lines", str(lines)]
+    if not follow:
+        args.append("--nostream")
+    raise typer.Exit(subprocess.run(args).returncode)
+
+
+def _render_supervisor(res: dict) -> None:
+    if not res.get("ok"):
+        rprint(f"[red]{res.get('action', 'error')}[/red]: {res.get('error', 'unknown error')}")
+        raise typer.Exit(1)
+    app_st = res.get("app") or {}
+    extra = f"  ([dim]{app_st.get('status')}[/dim])" if app_st.get("status") else ""
+    rprint(f"[green]{res['action']}[/green] {supervisor.APP_NAME}{extra}")
+
+
+def _dur(seconds: int | None) -> str:
+    if not seconds:
+        return "—"
+    h, rem = divmod(int(seconds), 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}h{m}m" if h else f"{m}m{s}s" if m else f"{s}s"
 
 
 @app.command("status")
