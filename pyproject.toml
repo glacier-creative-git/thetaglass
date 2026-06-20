@@ -9,6 +9,8 @@ dependencies = [
     "mcp>=1.2",
     "rich>=13.7",
     "typer>=0.12",
+    "plotille>=6.0",   # rgb braille charts for the per-position drill-down
+    "textual>=8.0",    # the interactive arrow-key monitor (tg monitor)
 ]
 
 [project.optional-dependencies]

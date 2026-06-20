@@ -230,6 +230,34 @@ def _dur(seconds: int | None) -> str:
     return f"{h}h{m}m" if h else f"{m}m{s}s" if m else f"{s}s"
 
 
+@app.command("monitor")
+def monitor(
+    mock: bool = typer.Option(None, "--mock/--no-mock",
+                              help="Include a synthetic position. Default: auto-add when "
+                                   "fewer than two real positions exist."),
+):
+    """Interactive drill-down dashboard: ↑/↓ to select a position, chart updates live.
+
+    Top: the selected position's underlying + P/L cone charts. Bottom: an arrow-navigable
+    list of dense position cards.
+    """
+    from thetaglass.mock import make_mock_book
+    from thetaglass.store import Store
+    from thetaglass.view.monitor import run_monitor
+
+    with Store() as store:
+        entries = [(p, store.history(p["position_id"])) for p in store.current_positions()]
+
+    add_mock = mock if mock is not None else (len(entries) < 2)
+    if add_mock:
+        entries += make_mock_book(1)
+        rprint("[dim]Including a MOCK position for demonstration.[/dim]")
+    if not entries:
+        rprint("[yellow]No positions to show. Run `tg sync` or use --mock.[/yellow]")
+        raise typer.Exit()
+    run_monitor(entries)
+
+
 @app.command("status")
 def status():
     """The overview: a Gantt timeline of every open position (reads the store).
