@@ -57,10 +57,12 @@ class Broker(ABC):
         options payload. Cheap and batchable across all distinct underlyings."""
 
     @abstractmethod
-    def get_equity_historicals(self, symbol: str, start_time: str,
-                               interval: str = "day") -> list[dict]:
-        """Historical OHLC bars for one underlying from start_time (RFC3339) to now.
+    def get_equity_historicals(self, symbol: str, start_time: str, interval: str = "day",
+                               end_time: str | None = None) -> list[dict]:
+        """Historical OHLC bars for one underlying over [start_time, end_time] (RFC3339;
+        end_time defaults to now). `interval` may be intraday (e.g. 'hour') or 'day'.
 
-        Used to backfill the real price history we weren't around to record, and to
-        compute realized volatility. Returns raw bar dicts (open/high/low/close/volume).
+        Used to backfill the real price history we weren't around to record, to compute
+        realized volatility, and to find the underlying price at a position's fill moment.
+        Returns raw bar dicts (open/high/low/close/volume).
         """

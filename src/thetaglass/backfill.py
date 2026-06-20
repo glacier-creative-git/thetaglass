@@ -32,6 +32,40 @@ def backfill_symbol(broker: Broker, store: Store, symbol: str, since: date) -> i
     return store.upsert_equity_bars(symbol, bars)
 
 
+def entry_iv_for_position(broker: Broker, pos: dict) -> float | None:
+    """Reconstruct a position's true entry IV: find the underlying's price at the actual
+    fill moment (intraday hourly bar nearest opened_at) and BS-invert the short leg's fill.
+
+    Uses intraday — not the daily close — because a position opened mid-session on a volatile
+    day can sit far from that day's close, which would throw the implied IV way off.
+    """
+    from thetaglass.state.blackscholes import implied_entry_iv
+
+    short = next((l for l in pos.get("legs", []) if l.get("side") == "short"), None)
+    if not short or not pos.get("opened_at") or not pos.get("dte_at_open"):
+        return None
+    opened = datetime.fromisoformat(pos["opened_at"].replace("Z", "+00:00"))
+    day = opened.date()
+    bars = broker.get_equity_historicals(
+        pos["underlying"], day.isoformat() + "T00:00:00Z", "hour",
+        end_time=(day + timedelta(days=1)).isoformat() + "T00:00:00Z")
+    cand = []
+    for b in bars:
+        c, ts = b.get("close_price"), b.get("begins_at")
+        if c and ts:
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if t.date() == day:
+                cand.append((t, float(c)))
+    if not cand:
+        return None
+    s_entry = min(cand, key=lambda x: abs((x[0] - opened).total_seconds()))[1]
+    fill = abs(short.get("average_price") or 0.0) / 100.0     # per-contract $ → per share
+    if fill <= 0:
+        return None
+    return implied_entry_iv(short["option_type"], fill, s_entry, short["strike"],
+                            pos["dte_at_open"])
+
+
 def backfill_for_positions(broker: Broker, store: Store, positions) -> dict[str, int]:
     """Backfill each distinct underlying behind the given positions (Position objects).
 

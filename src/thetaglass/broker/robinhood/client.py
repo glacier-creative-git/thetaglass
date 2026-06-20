@@ -105,11 +105,13 @@ class RobinhoodBroker(Broker):
         data = d.get("data") or {} if isinstance(d, dict) else {}
         return data.get("results") or data.get("quotes") or []
 
-    def get_equity_historicals(self, symbol: str, start_time: str,
-                               interval: str = "day") -> list[dict]:
-        """Daily (or other interval) OHLC bars for one symbol from start_time → now."""
-        d = self.call("get_equity_historicals",
-                      {"symbols": [symbol], "start_time": start_time, "interval": interval})
+    def get_equity_historicals(self, symbol: str, start_time: str, interval: str = "day",
+                               end_time: str | None = None) -> list[dict]:
+        """OHLC bars for one symbol over [start_time, end_time] at the given interval."""
+        args = {"symbols": [symbol], "start_time": start_time, "interval": interval}
+        if end_time:
+            args["end_time"] = end_time
+        d = self.call("get_equity_historicals", args)
         data = d.get("data") or {} if isinstance(d, dict) else {}
         results = data.get("results") or []
         return results[0].get("bars") or [] if results else []

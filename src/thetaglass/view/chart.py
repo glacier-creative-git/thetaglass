@@ -230,6 +230,13 @@ def render_iv_chart(pos: dict, history: list[dict],
     if iv_entry:
         fig.plot([0, dte0], [iv_entry, iv_entry], lc=C_IVENTRY)
 
+    # Blue backfill: from the true entry IV (BS-inverted from the real fill) at open to the
+    # first IV we actually observed — a real interpolation between two real endpoints, same
+    # spirit as the P/L backfill bridge.
+    backfilled = bool(pts) and pts[0][0] > 0.5 and iv_entry > 0
+    if backfilled:
+        fig.plot([0.0, pts[0][0]], [iv_entry, pts[0][1]], lc=C_BACKFILL)
+
     # IV path, colored per segment: green below entry (good), red above (bad)
     for i in range(1, len(pts)):
         (x0, y0), (x1, y1) = pts[i - 1], pts[i]
@@ -245,6 +252,8 @@ def render_iv_chart(pos: dict, history: list[dict],
                else "vol UP — vega against you")
     title = (f" IMPLIED VOL vs entry   now {iv_now:.0f}%   entry {iv_entry:.0f}%   "
              f"Δ {delta:+.0f}pts   {verdict}")
-    key = _key(("IV < entry (good)", C_IV_GOOD), ("IV > entry (bad)", C_IV_BAD),
-               ("IV@entry", C_IVENTRY))
-    return title + "\n " + key + "\n" + fig.show()
+    key_items = [("IV < entry (good)", C_IV_GOOD), ("IV > entry (bad)", C_IV_BAD)]
+    if backfilled:
+        key_items.append(("backfill", C_BACKFILL))
+    key_items.append(("IV@entry", C_IVENTRY))
+    return title + "\n " + _key(*key_items) + "\n" + fig.show()

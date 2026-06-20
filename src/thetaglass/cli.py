@@ -262,7 +262,7 @@ def monitor(
     Top: the selected position's underlying + P/L cone charts. Bottom: an arrow-navigable
     list of dense position cards.
     """
-    from thetaglass.backfill import backfill_for_positions
+    from thetaglass.backfill import backfill_for_positions, entry_iv_for_position
     from thetaglass.mock import closes_from_history, make_mock_book
     from thetaglass.state.assemble import assemble_positions
     from thetaglass.store import Store
@@ -274,11 +274,19 @@ def monitor(
         try:
             backfill_for_positions(broker, store, assemble_positions(broker, store=store))
         except Exception as e:  # offline / auth issue — fall back to snapshot prices
-            rprint(f"[yellow]Backfill skipped ({e}); RV uses snapshot prices.[/yellow]")
+            rprint(f"[yellow]Backfill skipped ({e}); charts use snapshot prices.[/yellow]")
         entries = []
         for p in store.current_positions():
             hist = store.history(p["position_id"])
             closes = store.equity_closes(p["underlying"]) or closes_from_history(hist)
+            # reconstruct the true entry IV from the fill (so the IV cell reads vs where
+            # we actually sold, and can backfill the pre-watch gap)
+            try:
+                iv0 = entry_iv_for_position(broker, p)
+                if iv0:
+                    p["iv_at_entry"] = round(iv0, 4)
+            except Exception:
+                pass
             entries.append((p, hist, closes))
 
     add_mock = mock if mock is not None else (len(entries) < 2)
