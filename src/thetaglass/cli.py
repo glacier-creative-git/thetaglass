@@ -9,6 +9,7 @@ import json
 
 import typer
 from rich import print as rprint
+from rich.table import Table
 
 from thetaglass.broker.robinhood.auth import AuthStore
 from thetaglass.broker.robinhood.client import RobinhoodBroker
@@ -114,6 +115,61 @@ def inspect():
         rprint(f"  net greeks       Δ{p.net_delta} Γ{p.net_gamma} Θ{p.net_theta} V{p.net_vega}")
         rprint(f"  IV now / entry   {p.iv_now} / {p.iv_at_entry}  (Δ {_pct(p.iv_regime_delta_pct)})")
         rprint(f"  [bold]health {p.health_score}[/bold]  axes={p.health_axes}")
+
+
+@app.command("sync")
+def sync(
+    daily_close: bool = typer.Option(
+        False, "--daily-close", help="Mark this tick as the official end-of-day record "
+                                     "(stores the full Position snapshot)."),
+):
+    """Run one sync tick and persist it: resolve, assemble, and write to the store.
+
+    This is the unit the Timekeeper will call on a clock. Run it twice and the history
+    starts accumulating — the same data the Rich view and MCP server read back.
+    """
+    from thetaglass.state.assemble import assemble_positions
+    from thetaglass.store import Store
+
+    with Store() as store:
+        positions = assemble_positions(RobinhoodBroker(), store=store)
+        seen = store.record_tick(positions, is_daily_close=daily_close)
+    tag = " [dim](daily close)[/dim]" if daily_close else ""
+    rprint(f"[green]synced[/green] {len(seen)} position(s){tag}")
+    for p in positions:
+        rprint(f"  {p.underlying} {p.strategy_type}  health [bold]{p.health_score}[/bold]")
+
+
+@app.command("status")
+def status():
+    """Show the latest persisted state of every open position (reads the store).
+
+    Minimal table for now — the Rich Gantt overview (Layer E1) is the next slice.
+    """
+    from thetaglass.store import Store
+
+    with Store() as store:
+        rows = store.current_positions()
+    if not rows:
+        rprint("[yellow]No open positions in the store. Run `tg sync` first.[/yellow]")
+        return
+
+    table = Table(title="Thetaglass — open positions")
+    for col in ("underlying", "strategy", "P/L", "captured", "expected", "dist→K", "health"):
+        table.add_column(col)
+    for p in rows:
+        health = p.get("health_score")
+        color = "green" if (health or 0) >= 0.7 else "yellow" if (health or 0) >= 0.4 else "red"
+        table.add_row(
+            p.get("underlying", "?"),
+            p.get("strategy_type", "?"),
+            f"${p.get('pl_dollars')}",
+            _pct(p.get("pl_pct_of_max_profit")),
+            _pct(p.get("expected_pl_pct")),
+            _pct(p.get("distance_to_short_strike_pct")),
+            f"[{color}]{health}[/{color}]",
+        )
+    rprint(table)
 
 
 def _pct(x: float | None) -> str:

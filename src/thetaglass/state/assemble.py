@@ -10,9 +10,14 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from typing import TYPE_CHECKING
+
 from thetaglass.broker.base import Broker
 from thetaglass.state import compute, identity
 from thetaglass.state.models import Leg, Position
+
+if TYPE_CHECKING:
+    from thetaglass.store import Store
 
 
 def _f(x) -> float | None:
@@ -27,7 +32,8 @@ def _dte(expiration: str, ref: date) -> int:
     return (exp - ref).days
 
 
-def assemble_positions(broker: Broker, today: date | None = None) -> list[Position]:
+def assemble_positions(broker: Broker, today: date | None = None,
+                       store: "Store | None" = None) -> list[Position]:
     today = today or datetime.utcnow().date()
 
     # 1. raw legs across all accounts, tagged with their account number
@@ -42,9 +48,16 @@ def assemble_positions(broker: Broker, today: date | None = None) -> list[Positi
     if not raw_legs:
         return []
 
-    # 2. resolve strike/type for every leg (one cached call; static metadata)
+    # 2. resolve strike/type for every leg. Static metadata, so resolve-once: pull
+    #    cache hits from the store and only ask the broker about the rest.
     option_ids = [p["option_id"] for p in raw_legs]
-    meta = {i["id"]: i for i in broker.get_option_instruments(option_ids)}
+    meta: dict[str, dict] = store.get_instruments(option_ids) if store else {}
+    missing = [oid for oid in option_ids if oid not in meta]
+    if missing:
+        fresh = list(broker.get_option_instruments(missing))
+        if store:
+            store.cache_instruments(fresh)
+        meta.update({i["id"]: i for i in fresh})
 
     legs_with_meta: list[tuple[Leg, dict]] = []
     for p in raw_legs:
