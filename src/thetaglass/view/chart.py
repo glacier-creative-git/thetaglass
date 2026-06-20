@@ -101,18 +101,19 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     realized_now = ys[-1] if ys else (pos.get("pl_dollars") or 0.0)
 
     # The cone is a FORECAST: it starts at NOW (anchored to the current realized value)
-    # and fans to expiration — NOT from open. Compute it here; draw it in a careful order
-    # below. top = √time path up to max profit; bot = linear bleed down to max loss.
+    # and fans to expiration — NOT from open. Both edges follow the SAME √time progress
+    # (slow now, accelerating toward expiry), fanning UP to max profit and DOWN to max
+    # loss. Matching curves make the cone symmetric in shape, so the dollar asymmetry (a
+    # 2:1 spread dives far steeper in red than it climbs in green) reads at a glance.
     xs_f = top = bot = None
     if now_x < dte0:
         n = 48
         xs_f = [now_x + (dte0 - now_x) * i / n for i in range(n + 1)]
         e_now = expected_pl_pct(dte0 - now_x, dte0)
         denom = (1.0 - e_now) or 1.0
-        top = [realized_now + (max_profit - realized_now) *
-               ((expected_pl_pct(dte0 - x, dte0) - e_now) / denom) for x in xs_f]
-        bot = [realized_now + (-max_loss - realized_now) *
-               ((x - now_x) / (dte0 - now_x)) for x in xs_f]
+        prog = [(expected_pl_pct(dte0 - x, dte0) - e_now) / denom for x in xs_f]
+        top = [realized_now + (max_profit - realized_now) * p for p in prog]
+        bot = [realized_now + (-max_loss - realized_now) * p for p in prog]
 
     # Backfill: if we started watching after open, bridge the gap with a straight, clearly
     # BLUE line from break-even at open ($0) to the first real reading. We know the entry
@@ -120,18 +121,17 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     xs_y = xs_real[:len(ys)]
     backfilled = bool(ys) and xs_y[0] > 0.5
 
-    # Draw order matters — one color per braille cell. The green √t top and red max-loss
-    # bottom share cells near the cone tip (both start at the same positive value), so we
-    # draw the red max-loss line LAST: the danger line then wins every shared cell and
-    # always reads red, never green.
-    if top is not None:
-        fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
-    if backfilled:
-        fig.plot([0.0, xs_y[0]], [0.0, ys[0]], lc=C_BACKFILL, label="backfill (est.)")
-    if ys:
-        fig.plot(xs_y, ys, lc=C_REAL, label="realized P/L")
+    # Draw order (one color per braille cell): max-loss first (lowest priority), then
+    # backfill, on-track, and realized LAST on top — so where lines share a cell, your
+    # actual P/L wins. With the tall side-by-side cells they barely overlap anyway.
     if bot is not None:
         fig.plot(xs_f, bot, lc=C_WORST, label="max-loss")
+    if backfilled:
+        fig.plot([0.0, xs_y[0]], [0.0, ys[0]], lc=C_BACKFILL, label="backfill (est.)")
+    if top is not None:
+        fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
+    if ys:
+        fig.plot(xs_y, ys, lc=C_REAL, label="realized P/L")
 
     dte_now = dte0 - now_x
     title = (f" P/L (up = made money)    max profit ${max_profit:g}   "
@@ -139,7 +139,7 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     key_items = [("realized", C_REAL)]
     if backfilled:
         key_items.append(("backfill", C_BACKFILL))
-    key_items += [("on-track √t (cone top)", C_SQRT), ("max-loss (cone bottom)", C_WORST)]
+    key_items += [("on-track √t (top)", C_SQRT), ("max-loss √t (bottom)", C_WORST)]
     return title + "\n " + _key(*key_items) + "\n" + fig.show()
 
 
