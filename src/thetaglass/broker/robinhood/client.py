@@ -84,6 +84,27 @@ class RobinhoodBroker(Broker):
             out.extend(r.get("quote") or {} for r in (data.get("results") or []))
         return out
 
+    def get_option_instruments(self, instrument_ids: list[str]) -> list[dict]:
+        """Resolve strike/type/expiration for specific instrument UUIDs (cache these).
+
+        RH's `ids` param looks them up directly — no need to page a whole chain.
+        """
+        ids = list(instrument_ids)
+        if not ids:
+            return []
+        d = self.call("get_option_instruments", {"ids": ",".join(ids)})
+        data = d.get("data") or {} if isinstance(d, dict) else {}
+        return data.get("instruments") or data.get("results") or []
+
+    def get_equity_quotes(self, symbols: list[str]) -> list[dict]:
+        """Underlying spot quotes (for distance-to-short-strike)."""
+        syms = list(symbols)
+        if not syms:
+            return []
+        d = self.call("get_equity_quotes", {"symbols": syms})
+        data = d.get("data") or {} if isinstance(d, dict) else {}
+        return data.get("results") or data.get("quotes") or []
+
     # ---- extra read helpers (not on the Broker interface; RH-specific niceties) ----
     def get_portfolio(self, account_number: str) -> dict:
         return self.call("get_portfolio", {"account_number": account_number})

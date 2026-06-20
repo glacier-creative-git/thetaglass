@@ -40,3 +40,18 @@ class Broker(ABC):
         This is the per-tick feed that drives decay/health recomputation. Implementations
         should handle any broker-side batch-size limits internally.
         """
+
+    @abstractmethod
+    def get_option_instruments(self, instrument_ids: list[str]) -> list[dict]:
+        """Static contract metadata (strike, call/put, expiration) for instrument ids.
+
+        Brokers tend to omit strike and option-type from position/quote payloads, yet
+        Thetaglass needs them for max_loss, strategy classification, and distance-to-
+        strike. This metadata never changes for a given id, so callers should resolve
+        once on first sighting and cache it — NOT call this every tick.
+        """
+
+    @abstractmethod
+    def get_equity_quotes(self, symbols: list[str]) -> list[dict]:
+        """Underlying spot quotes. Needed for distance-to-short-strike; not in any
+        options payload. Cheap and batchable across all distinct underlyings."""
