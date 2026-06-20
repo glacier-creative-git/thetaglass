@@ -30,7 +30,6 @@ C_REAL = (120, 230, 150)     # realized P/L — bright green
 C_BACKFILL = (95, 150, 245)  # estimated pre-watch P/L (linear bridge) — blue
 C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
-C_ZERO = (110, 110, 120)     # break-even / reference — grey
 C_CONE = (140, 140, 155)     # forward projection cone — dim grey
 
 
@@ -67,6 +66,10 @@ def _new_fig(width: int, height: int, dte0: float, ylabel: str) -> plotille.Figu
     fig.width = max(30, width - _X_GUTTER)
     fig.height = max(6, height - _Y_GUTTER)
     fig.color_mode = "rgb"
+    # Suppress plotille's origin cross-hairs: when the y-range spans 0 it otherwise draws
+    # a full-width grey axis line at $0 straight through the chart, which collides with the
+    # colored cone lines where they cross break-even. Axis labels/frame are unaffected.
+    fig.origin = False
     fig.x_label, fig.y_label = "day", ylabel
     fig.set_x_limits(min_=0, max_=dte0)
     fig.y_ticks_fkt = lambda v, _: f"{v:,.0f}"      # whole dollars / prices, no 10-digit noise
@@ -96,8 +99,6 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
 
     ys = [h["pl_dollars"] for h in history if h.get("pl_dollars") is not None]
     realized_now = ys[-1] if ys else (pos.get("pl_dollars") or 0.0)
-
-    fig.plot([0, dte0], [0, 0], lc=C_ZERO, label="break-even")
 
     # The cone is a FORECAST, so it starts at NOW (anchored to the current realized value)
     # and fans to expiration — NOT from open. That leaves the realized line alone on the
