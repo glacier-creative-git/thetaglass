@@ -229,11 +229,16 @@ CREATE TABLE positions (
     last_synced_at   TEXT
 );
 
--- Append-only history. One row per OPEN position per tick. This IS the decay curve.
+-- Append-only history. One row per OPEN position per tick. This IS the decay curve
+-- AND the trend history that agents read (see Layer E). HYBRID storage:
+--   * every tick  -> the slim scalar columns below (enough to draw any trend line)
+--   * daily close -> is_daily_close=1 AND snapshot_json = the full Position object
+-- so intraday stays lean while each day keeps a complete state-of-record.
 CREATE TABLE snapshots (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     position_id         TEXT,
     tick_at             TEXT,
+    is_daily_close      INTEGER DEFAULT 0,   -- 1 = official end-of-day record
     dte_remaining       INTEGER,
     underlying_price    REAL,
     current_value       REAL,
@@ -244,9 +249,11 @@ CREATE TABLE snapshots (
     net_delta REAL, net_gamma REAL, net_theta REAL, net_vega REAL,
     iv_now              REAL,
     iv_regime_delta_pct REAL,
-    distance_to_short_strike_pct REAL
+    distance_to_short_strike_pct REAL,
+    snapshot_json       TEXT                 -- NULL intraday; full Position on daily close
 );
-CREATE INDEX idx_snap_pos_time ON snapshots(position_id, tick_at);
+CREATE INDEX idx_snap_pos_time  ON snapshots(position_id, tick_at);
+CREATE INDEX idx_snap_pos_daily ON snapshots(position_id, is_daily_close);
 
 -- Materialized "latest" view: one row per OPEN position, overwritten each tick.
 -- Lets `tg status` read instantly without scanning snapshots.
@@ -282,8 +289,9 @@ CREATE INDEX idx_alerts_state ON alerts(state);
 exactly what Clock 2 needs.
 
 **Retention.** Snapshots are tiny: ~78 ticks/market-day × ~30-day life ≈ 2,300 rows per
-position, a few hundred KB. v1 keeps everything. Future knob: downsample snapshots of
-*closed* positions to daily. Not worth building yet.
+position, a few hundred KB. With hybrid storage only the ~30 daily-close rows per
+position carry the heavier `snapshot_json`. v1 keeps everything. Future knob: downsample
+intraday rows of *closed* positions. Not worth building yet.
 
 ---
 
@@ -384,7 +392,118 @@ block, nothing structural.
 | `breach_threshold_pct` | **3%** | price cushion that counts as "safe" |
 | `iv_alert_threshold_pct` | **15%** | IV jump from entry that's alarming |
 | close grace window | **2 missing ticks** | avoid closing on an API hiccup |
-| snapshot retention | **keep everything** | history depth |
+| snapshot storage | **hybrid: slim intraday + full-state daily close** | history depth & detail |
 
 Once these feel right, Layer A–C is ready to implement as written, and D is just
 transcribing the two formulas above.
+
+---
+
+## 6. Layer E — Views & history-as-context
+
+Everything above produces *data*. This layer is about *showing* it — to two very
+different audiences with one rule:
+
+> **One store, two consumers.** The store (Layers A–C) is the single source of truth.
+> The **CLI renders it for humans** (Rich/Textual). The **MCP server serves it as
+> structured JSON for agents**. Neither is "the real one" — they're two views of the
+> same data, and we never make an agent parse human formatting or make a human read raw
+> JSON.
+
+### E0. Why history is a first-class product, not chart fuel
+
+A single snapshot says *"IV is 0.25, you're up $19."* A **history** says *"IV has climbed
+30% over four sessions while the underlying drifted 2% toward your short strike."* The
+second one is the difference between a gauge and an analyst. When Hermes or OpenClaw
+hits the MCP, the **trajectory** is what lets it reason — spot that a move isn't random,
+that there's a building catalyst, that decay has stalled. So the `snapshots` table isn't
+plumbing for a chart; it's the main thing agents consume. That's why Layer C stores the
+full state-of-record daily and the trend columns every tick.
+
+### E1. The overview — `tg status` (Rich)
+
+A **Gantt chart on a shared time axis**: each position is a row spanning
+`[opened_at → expiration]`, positioned absolutely on a NOW-centered axis.
+
+```
+                                                              | NOW
+QQQ 729/727 put credit   exp Jul-17  P/L +$19   θ -0.03   ──────####------------
+SPY 670/665 put credit   exp Jul-31  P/L +$166  θ +0.12        ──##----------------
+IWM ... (just opened)    exp Aug-15  P/L  −$4   θ +0.05            #-----------------
+... (about to expire)    exp Jun-26  P/L +$88   θ +0.21   ──────────────────####
+```
+
+- **Solid `#`/`─` = elapsed, dashed `--` = remaining** (the live forecast tail).
+- **Color encodes health** (green ≥0.7, amber 0.4–0.7, red <0.4) so the eye finds the
+  sick position instantly.
+- Trailing metadata per row: expiration, P/L, health, and the Greeks (theta shown
+  explicitly, others on `--wide`).
+- `--watch` re-renders live off `positions_current`.
+
+Implementation: a custom Rich renderable that maps each position's dates to column
+positions. Works over SSH, in pipes, headless — which is why the *overview* is Rich, not
+Textual.
+
+### E2. The drill-down — `tg position <id>` (Textual + plotext)
+
+The single-position deep dive. A real terminal line chart (via **plotext**, which embeds
+in both Rich and Textual), plotted from a **P/L perspective so up = you made money** (the
+short options losing value moves the line up):
+
+- **Left of NOW — the realized path** (solid), reconstructed from the snapshot history:
+  actual P/L% over the life of the trade so far.
+- **Right of NOW — the price-scenario forecast cone:**
+    - **expected** = the √time neutral path toward max profit,
+    - **best** = underlying holds/improves → decays to the **max-profit ceiling**,
+    - **worst** = underlying drifts to the short strike → value grows against you, toward
+      the **max-loss floor**,
+    - plus the **linear** path drawn faintly for comparison.
+- Below the chart: the full Greeks, the three health axes broken out, IV-vs-entry, and
+  the recent trend deltas.
+
+```
+ P/L %
+ 100% |__________________ best (price holds) _______________
+      |              .-''   expected (√time)
+   +  |         .-''     ______
+ NOW  |======.-'''__.--''
+   -  |   realized  ''--.._
+      |                   ''--.._ worst (→ short strike)
+-loss |_______________________''-.________________________
+      open            NOW            →                  exp
+```
+
+Textual gives navigation (arrow between positions, live refresh). This is the most work
+and the least critical surface, so it ships last.
+
+### E3. History over MCP — the agent's context window into the trade
+
+New/extended tools (structured JSON, never formatted text):
+
+- **`get_position_history(position_id, granularity: "daily"|"intraday", since?)`**
+  → the time series an agent reasons over: each point carries `tick_at`, `underlying`,
+  `iv_now`, `pl_pct`, `health_score`, `distance_to_short_strike_pct`, Greeks. Plus a small
+  **trend summary** so the agent doesn't recompute slopes:
+  `{ iv_change_5d: +0.30, underlying_change_5d: -0.018, health_change_5d: -0.11 }`.
+- **`get_position_detail`** (§6.5) returns the current Position **plus** its daily history
+  inline, so one call gives full context.
+
+### E4. The "return the Rich format over MCP?" question, settled
+
+- **Textual can't** be returned — it's an interactive app, not a payload. (Correct; you
+  wouldn't want it.)
+- **Rich static output can** be captured to a string (`Console(record=True)
+  .export_text()`), but we **don't** make it an agent's primary payload — agents reason
+  better over JSON than over ANSI tables.
+- Where a *human* is on the receiving end of a machine path — the **Telegram emitter** —
+  we may attach a compact pre-rendered Rich text block as a *secondary* field. That's the
+  one place pre-rendered formatting earns its keep.
+
+### Build order (unchanged, now with E placed)
+
+1. **Store + state machine** (Layers A–C). Everything hangs off this.
+2. **Rich overview** (E1) — building the view validates the data shapes and is motivating
+   to see.
+3. **MCP server** (E3) — trivial once the store is right: serialize the same objects + the
+   history endpoint.
+4. **Textual drill-down** (E2) — the charts; most effort, least critical, ships last.
