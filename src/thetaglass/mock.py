@@ -32,11 +32,15 @@ def _history_for(pos: Position, opened: datetime, now: datetime, *,
     """
     rng = random.Random(seed)
     short = pos.short_leg
+    base_iv = short.iv or 0.25
     rows: list[dict] = []
     days = max(1, (now.date() - opened.date()).days)
     spot = spot_open
+    iv = base_iv
     for d in range(days + 1):
         spot += spot_drift + rng.uniform(-vol, vol)
+        # IV drifts (mean-reverting wander) so the IV line isn't a flat demo artifact.
+        iv += (base_iv - iv) * 0.15 + rng.uniform(-0.012, 0.012)
         if d < start_day:
             continue
         dte_remaining = pos.dte_at_open - d
@@ -57,12 +61,23 @@ def _history_for(pos: Position, opened: datetime, now: datetime, *,
             "expected_pl_pct": round(exp_pct, 4),
             "health_score": None,
             "net_delta": None, "net_gamma": None, "net_theta": None, "net_vega": None,
-            "iv_now": round(short.iv or 0.25, 4),
+            "iv_now": round(max(0.05, iv), 4),
             "iv_regime_delta_pct": 0.0,
             "distance_to_short_strike_pct": round(dist, 4) if dist is not None else None,
             "snapshot_json": None,
         })
     return rows
+
+
+def closes_from_history(history: list[dict]) -> list[tuple[str, float]]:
+    """(date, close) series from snapshot underlying_price — the RV input when real
+    backfilled bars aren't available (mock positions, or a freshly-watched real one)."""
+    out = []
+    for h in history:
+        px = h.get("underlying_price")
+        if px is not None:
+            out.append((h["tick_at"][:10], px))
+    return out
 
 
 def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
@@ -114,7 +129,12 @@ _BOOK_PRESETS = [
 ]
 
 
-def make_mock_book(count: int = 1, now: datetime | None = None) -> list[tuple[dict, list[dict]]]:
-    """`count` distinct mock positions for the monitor demo / tests."""
-    return [make_mock_position(now, **_BOOK_PRESETS[i % len(_BOOK_PRESETS)])
-            for i in range(count)]
+def make_mock_book(count: int = 1,
+                   now: datetime | None = None) -> list[tuple[dict, list[dict], list[tuple[str, float]]]]:
+    """`count` distinct mock (position, history, closes) entries for the monitor / tests.
+    closes are derived from the position's own synthetic price walk (RV input)."""
+    out = []
+    for i in range(count):
+        pos, hist = make_mock_position(now, **_BOOK_PRESETS[i % len(_BOOK_PRESETS)])
+        out.append((pos, hist, closes_from_history(hist)))
+    return out

@@ -1,9 +1,11 @@
 """The interactive monitor (Layer E2) — `tg monitor`.
 
-A Textual dashboard in three stacked cells: the selected position's P/L chart and
-underlying chart each get a tall cell of their own (no shared Y axis), and a shorter,
-scrollable list of dense position cards sits at the bottom. ↑/↓ moves the highlight and
-both charts re-render for the newly selected position.
+A Textual dashboard: a 2×2 grid of charts over a scrollable list of dense position cards.
+↑/↓ moves the highlight and the charts re-render for the newly selected position.
+
+  ┌ Position P/L ┬ Underlying ┐
+  ├ IV vs RV     ┼ [EMPTY]    ┤   ← reserved cell for a future view
+  └ positions (arrow-navigable list) ┘
 
 Textual earns its keep here precisely because Rich can't capture arrow keys. Each chart
 is plotille's rgb-braille string wrapped via Text.from_ansi.
@@ -12,14 +14,15 @@ from __future__ import annotations
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import render_pnl_chart, render_underlying_chart
+from thetaglass.view.chart import (render_iv_rv_chart, render_pnl_chart,
+                                    render_underlying_chart)
 
-# entry = (position_dict, history_rows)
-Entry = tuple[dict, list[dict]]
+# entry = (position_dict, history_rows, underlying_closes)
+Entry = tuple[dict, list[dict], list]
 
 
 class PositionItem(ListItem):
@@ -36,10 +39,16 @@ class MonitorApp(App):
     # resolution of a stacked split), so the cone edges separate into their own cells.
     # TODO(adaptive): on narrow terminals (< ~110 cols) each cell gets cramped; could
     # switch to a stacked layout below a width breakpoint. Stubbed for now.
+    # 2×2 chart grid. Each cell is half-width/half-height of the charts area.
+    # TODO(adaptive): on narrow terminals the cells get cramped; could switch to a
+    # stacked single column below a width breakpoint. Stubbed for now.
     CSS = """
-    #charts { height: 3fr; }
-    #pnl   { width: 1fr; height: 100%; border: round $accent; padding: 0 1; }
-    #under { width: 1fr; height: 100%; border: round $accent; padding: 0 1; }
+    #charts   { height: 4fr; }
+    .chartrow { height: 1fr; }
+    #pnl, #under, #ivrv, #empty {
+        width: 1fr; height: 100%; border: round $accent; padding: 0 1;
+    }
+    #empty { color: $text-muted; content-align: center middle; }
     #plist { height: 1fr; min-height: 6; border: round $accent; }
     PositionItem { padding: 0 1; height: auto; }
     ListView > PositionItem.--highlight { background: $boost; }
@@ -50,13 +59,17 @@ class MonitorApp(App):
         super().__init__()
         self.entries = entries
         self.current_idx = 0
-        self.current_chart_text = ""   # pnl + underlying strings (for testability)
+        self.current_chart_text = ""   # pnl + underlying + ivrv strings (for testability)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        with Horizontal(id="charts"):
-            yield Static(id="pnl")
-            yield Static(id="under")
+        with Vertical(id="charts"):
+            with Horizontal(classes="chartrow"):
+                yield Static(id="pnl")
+                yield Static(id="under")
+            with Horizontal(classes="chartrow"):
+                yield Static(id="ivrv")
+                yield Static("[EMPTY]", id="empty")
         yield ListView(*[PositionItem(e) for e in self.entries], id="plist")
         yield Footer()
 
@@ -64,6 +77,8 @@ class MonitorApp(App):
         self.title = "Thetaglass — theta-decay monitor"
         self.query_one("#pnl", Static).border_title = "Position P/L"
         self.query_one("#under", Static).border_title = "Underlying"
+        self.query_one("#ivrv", Static).border_title = "IV vs RV"
+        self.query_one("#empty", Static).border_title = "—"
         self.query_one("#plist", ListView).border_title = "Positions  (↑/↓ select · q quit)"
         plist = self.query_one("#plist", ListView)
         plist.focus()
@@ -83,16 +98,17 @@ class MonitorApp(App):
         if not self.entries:
             return
         self.current_idx = idx
-        pos, hist = self.entries[idx]
-        pnl_w = self.query_one("#pnl", Static)
-        und_w = self.query_one("#under", Static)
-        pnl = render_pnl_chart(pos, hist, width=max(60, pnl_w.size.width - 2),
-                               height=max(10, pnl_w.size.height - 1))
-        und = render_underlying_chart(pos, hist, width=max(60, und_w.size.width - 2),
-                                      height=max(10, und_w.size.height - 1))
-        self.current_chart_text = pnl + und
-        pnl_w.update(_nowrap(pnl))
-        und_w.update(_nowrap(und))
+        pos, hist, closes = self.entries[idx]
+        pnl = self._draw("#pnl", render_pnl_chart, pos, hist)
+        und = self._draw("#under", render_underlying_chart, pos, hist)
+        ivrv = self._draw("#ivrv", render_iv_rv_chart, pos, hist, closes)
+        self.current_chart_text = pnl + und + ivrv
+
+    def _draw(self, sel: str, fn, *args) -> str:
+        w = self.query_one(sel, Static)
+        s = fn(*args, width=max(48, w.size.width - 2), height=max(8, w.size.height - 1))
+        w.update(_nowrap(s))
+        return s
 
 
 def _nowrap(ansi: str) -> Text:

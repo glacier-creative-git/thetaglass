@@ -9,9 +9,10 @@ from io import StringIO
 
 from rich.console import Console
 
-from thetaglass.mock import MOCK_PREFIX, make_mock_book, make_mock_position
+from thetaglass.mock import MOCK_PREFIX, closes_from_history, make_mock_book, make_mock_position
+from thetaglass.state.volatility import realized_vol, rv_series
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import render_pnl_chart, render_underlying_chart
+from thetaglass.view.chart import render_iv_rv_chart, render_pnl_chart, render_underlying_chart
 from thetaglass.view.monitor import MonitorApp
 
 BRAILLE = range(0x2800, 0x28FF + 1)
@@ -39,8 +40,10 @@ def test_mock_position_shape():
 
 def test_mock_book_is_distinct():
     book = make_mock_book(3)
-    syms = {p["underlying"] for p, _ in book}
+    syms = {pos["underlying"] for pos, _hist, _closes in book}
     assert len(book) == 3 and len(syms) == 3
+    # every entry carries a (date, close) series for RV
+    assert all(closes and len(closes[0]) == 2 for _pos, _hist, closes in book)
 
 
 def test_pnl_chart_renders_cone():
@@ -75,6 +78,31 @@ def test_card_contains_key_metrics():
     out = _render(render_position_card(pos))
     assert pos["underlying"] in out
     assert "MOCK" in out and "health" in out and "DTE" in out
+
+
+def test_realized_vol_is_annualized():
+    # a steady 1%/day zig-zag → nonzero annualized vol; flat series → ~0
+    import math
+    closes = [100 * (1.01 if i % 2 else 1 / 1.01) ** 1 for i in range(40)]
+    rv = realized_vol(closes, window=20)
+    assert rv is not None and rv > 0
+    assert realized_vol([100.0] * 40, window=20) == 0.0  # no movement → 0 vol
+    assert realized_vol([100.0, 101.0], window=20) is None  # too little data
+
+
+def test_iv_rv_chart_renders():
+    pos, hist = make_mock_position(synced_after=4)
+    closes = closes_from_history(hist)
+    s = render_iv_rv_chart(pos, hist, closes, width=90, height=16)
+    assert "IV vs RV" in s
+    assert "IV (implied)" in s and "RV (realized)" in s     # the color key
+    assert _has_braille(s)
+
+
+def test_rv_series_grows_with_history():
+    pos, hist = make_mock_position()
+    series = rv_series(closes_from_history(hist), window=10)
+    assert series and all(v > 0 for _d, v in series)
 
 
 def test_arrow_nav_switches_chart():

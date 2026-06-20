@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import plotille
 
 from thetaglass.state.baseline import expected_pl_pct
+from thetaglass.state.volatility import DEFAULT_WINDOW, realized_vol, rv_series
 
 # rgb line colors (plotille color_mode="rgb")
 C_UNDER = (90, 200, 250)     # underlying price — cyan
@@ -31,6 +32,9 @@ C_BACKFILL = (95, 150, 245)  # estimated pre-watch P/L (linear bridge) — blue
 C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
 C_CONE = (140, 140, 155)     # forward projection cone — dim grey
+C_IV = (205, 130, 235)       # implied volatility — magenta
+C_RV = (235, 165, 80)        # realized volatility — orange
+C_IVENTRY = (130, 110, 150)  # IV at entry reference — dim purple
 
 
 def _parse(ts: str) -> datetime:
@@ -189,3 +193,66 @@ def render_underlying_chart(pos: dict, history: list[dict],
     key = _key((f"{pos['underlying']} price", C_UNDER), ("profit edge", C_PROFIT),
                ("max-loss edge", C_LOSS), ("break-even", C_BE), ("cone→exp", C_CONE))
     return title + "\n " + key + "\n" + fig.show()
+
+
+# ------------------------------------------------------------------------ IV / RV
+
+def _day_of(open_dt: datetime, d: str) -> float:
+    return (_parse(d) - open_dt).total_seconds() / 86400.0
+
+
+def render_iv_rv_chart(pos: dict, history: list[dict],
+                       closes: list[tuple[str, float]],
+                       width: int = 90, height: int = 16,
+                       window: int = DEFAULT_WINDOW) -> str:
+    """Implied vol (forward, from our option snapshots) vs realized vol (backward, from
+    the underlying's actual moves). Same units (annualized %), so they overlay on one Y.
+
+    `closes` is the (date, close) series for the underlying (real bars, or — as a fallback
+    for demos/new positions — the underlying_price from snapshot history)."""
+    open_dt = _parse(pos["opened_at"])
+    dte0 = pos.get("dte_at_open") or 1
+
+    # IV series from snapshots (forward-only: we can't recover historical option IV)
+    iv_x, iv_y = [], []
+    for h in history:
+        iv = h.get("iv_now")
+        if iv is not None:
+            iv_x.append(_day_of(open_dt, h["tick_at"]))
+            iv_y.append(iv * 100)
+    iv_now = iv_y[-1] if iv_y else (pos.get("iv_now") or 0) * 100
+    iv_entry = (pos.get("iv_at_entry") or 0) * 100
+
+    # RV series from underlying closes (real, can extend back before open)
+    rv = rv_series(closes, window) if closes else []
+    rv_x = [_day_of(open_dt, d) for d, _ in rv]
+    rv_y = [v * 100 for _, v in rv]
+    # keep only the position's life on the shared DTE axis (day 0 → expiry)
+    rv_pts = [(x, y) for x, y in zip(rv_x, rv_y) if 0 <= x <= dte0]
+    rv_now = realized_vol([c for _, c in closes], window) if closes else None
+    rv_now_pct = rv_now * 100 if rv_now is not None else None
+
+    allv = iv_y + [y for _, y in rv_pts] + ([iv_entry] if iv_entry else [])
+    lo, hi = (min(allv), max(allv)) if allv else (0, 50)
+    pad = (hi - lo) * 0.15 or 5.0
+
+    fig = _new_fig(width, height, dte0, "vol %")
+    fig.set_y_limits(min_=max(0, lo - pad), max_=hi + pad)
+    fig.x_label = "days to exp"
+    fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
+
+    if iv_entry:
+        fig.plot([0, dte0], [iv_entry, iv_entry], lc=C_IVENTRY, label="IV@entry")
+    if rv_pts:
+        fig.plot([x for x, _ in rv_pts], [y for _, y in rv_pts], lc=C_RV, label="RV")
+    if iv_x:
+        fig.plot(iv_x, iv_y, lc=C_IV, label="IV")
+
+    prem = (iv_now - rv_now_pct) if (rv_now_pct is not None) else None
+    prem_txt = (f"  premium {prem:+.0f}pts ({'rich' if prem >= 0 else 'cheap'})"
+                if prem is not None else "")
+    title = (f" IV vs RV (annualized)   IV {iv_now:.0f}%   "
+             f"RV{window}d {rv_now_pct:.0f}%" if rv_now_pct is not None
+             else f" IV vs RV (annualized)   IV {iv_now:.0f}%   RV n/a")
+    key = _key(("IV (implied)", C_IV), ("RV (realized)", C_RV), ("IV@entry", C_IVENTRY))
+    return title + prem_txt + "\n " + key + "\n" + fig.show()

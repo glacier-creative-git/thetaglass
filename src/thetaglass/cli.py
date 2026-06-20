@@ -230,6 +230,27 @@ def _dur(seconds: int | None) -> str:
     return f"{h}h{m}m" if h else f"{m}m{s}s" if m else f"{s}s"
 
 
+@app.command("backfill")
+def backfill():
+    """Backfill real underlying price history (for the price line + realized volatility).
+
+    Fetches daily bars for each open position's underlying, from before it opened.
+    """
+    from thetaglass.backfill import backfill_for_positions
+    from thetaglass.state.assemble import assemble_positions
+    from thetaglass.store import Store
+
+    broker = RobinhoodBroker()
+    with Store() as store:
+        positions = assemble_positions(broker, store=store)
+        res = backfill_for_positions(broker, store, positions)
+    if not res:
+        rprint("[yellow]No open positions to backfill.[/yellow]")
+        return
+    for sym, n in res.items():
+        rprint(f"[green]backfilled[/green] {sym}: {n} daily bars")
+
+
 @app.command("monitor")
 def monitor(
     mock: bool = typer.Option(None, "--mock/--no-mock",
@@ -241,12 +262,24 @@ def monitor(
     Top: the selected position's underlying + P/L cone charts. Bottom: an arrow-navigable
     list of dense position cards.
     """
-    from thetaglass.mock import make_mock_book
+    from thetaglass.backfill import backfill_for_positions
+    from thetaglass.mock import closes_from_history, make_mock_book
+    from thetaglass.state.assemble import assemble_positions
     from thetaglass.store import Store
     from thetaglass.view.monitor import run_monitor
 
+    broker = RobinhoodBroker()
     with Store() as store:
-        entries = [(p, store.history(p["position_id"])) for p in store.current_positions()]
+        # ensure real underlying history is present (for the price line + RV)
+        try:
+            backfill_for_positions(broker, store, assemble_positions(broker, store=store))
+        except Exception as e:  # offline / auth issue — fall back to snapshot prices
+            rprint(f"[yellow]Backfill skipped ({e}); RV uses snapshot prices.[/yellow]")
+        entries = []
+        for p in store.current_positions():
+            hist = store.history(p["position_id"])
+            closes = store.equity_closes(p["underlying"]) or closes_from_history(hist)
+            entries.append((p, hist, closes))
 
     add_mock = mock if mock is not None else (len(entries) < 2)
     if add_mock:
