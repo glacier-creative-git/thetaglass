@@ -1,5 +1,9 @@
 """Black-Scholes pricing + implied-vol inversion (entry-IV reconstruction)."""
-from thetaglass.state.blackscholes import (bs_price, implied_vol, position_entry_iv)
+from thetaglass.state.blackscholes import (bs_price, implied_vol, position_entry_iv,
+                                           underlying_for_profit)
+
+_SPREAD = [{"side": "short", "option_type": "put", "strike": 729, "quantity": 2},
+           {"side": "long", "option_type": "put", "strike": 727, "quantity": 2}]
 
 
 def test_price_then_invert_recovers_vol():
@@ -29,3 +33,18 @@ def test_position_entry_iv_from_fill():
     closes = [("2026-06-16", 730.0), ("2026-06-17", S_open), ("2026-06-18", 740.0)]
     iv = position_entry_iv(pos, closes)
     assert iv is not None and abs(iv - true) < 5e-3
+
+
+def test_profit_edges_converge_to_strikes_at_expiry():
+    credit = mp = 150.0   # 2-contract put credit spread → $0.75/share credit
+    iv = 0.25
+    # at expiry: break-even (0%) ≈ short strike − credit/share; near-max ≈ short strike
+    be = underlying_for_profit(_SPREAD, credit, mp, 0.0, 0.0, iv)
+    assert abs(be - (729 - 0.75)) < 0.05
+    near_max = underlying_for_profit(_SPREAD, credit, mp, 0.999, 0.0, iv)
+    assert abs(near_max - 729) < 0.1
+    # with time left, the 90% edge sits ABOVE the short strike (needs an up-move) and
+    # decays toward it as expiry nears
+    far = underlying_for_profit(_SPREAD, credit, mp, 0.9, 27 / 365, iv)
+    near = underlying_for_profit(_SPREAD, credit, mp, 0.9, 5 / 365, iv)
+    assert far > near > 729

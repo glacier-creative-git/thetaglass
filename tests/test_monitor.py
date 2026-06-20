@@ -70,7 +70,8 @@ def test_underlying_chart_shows_edges():
     s = render_underlying_chart(pos, hist, closes_from_history(hist), width=90, height=18)
     assert _has_braille(s)
     assert "UNDERLYING" in s and pos["underlying"] in s
-    assert "profit edge" in s and "break-even" in s and "max-loss edge" in s   # the 3 levels
+    # the profit-% edge cone (BS run backwards), not flat strike lines
+    assert "max-profit edge" in s and "90% (max) profit" in s and "break-even 0%" in s
 
 
 def test_card_contains_key_metrics():

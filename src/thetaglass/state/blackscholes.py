@@ -57,6 +57,43 @@ def implied_entry_iv(option_type: str, fill_per_share: float, S: float, K: float
     return implied_vol(option_type, fill_per_share, S, K, max(dte_days, 0) / 365.0, r)
 
 
+def spread_cost_to_close(legs: list[dict], S: float, T: float, iv: float, r: float = R) -> float:
+    """Dollar cost to close a vertical at underlying S / time-to-expiry T (years), holding
+    IV flat: buy back shorts (pay), sell longs (receive)."""
+    total = 0.0
+    for l in legs:
+        sign = 1.0 if l["side"] == "short" else -1.0
+        total += sign * bs_price(l["option_type"], S, l["strike"], T, r, iv) * 100 * abs(l.get("quantity") or 1)
+    return total
+
+
+def underlying_for_profit(legs: list[dict], credit: float, max_profit: float, f: float,
+                          T: float, iv: float, r: float = R, iters: int = 50) -> float | None:
+    """The underlying price S at which the spread's P/L = f·max_profit, at time-to-expiry T.
+
+    Black-Scholes run backwards: P/L(S) = credit − cost_to_close(S) is monotone in S for a
+    vertical, so bisect. This is the 'what does the stock need to be for X% profit, this
+    many days out' curve — converging toward the strikes as T → 0.
+    """
+    target = f * max_profit
+
+    def pl(S: float) -> float:
+        return credit - spread_cost_to_close(legs, S, T, iv, r)
+
+    lo, hi = 1.0, max(l["strike"] for l in legs) * 3.0
+    plo, phi = pl(lo), pl(hi)
+    if not (min(plo, phi) - 1e-6 <= target <= max(plo, phi) + 1e-6):
+        return None
+    increasing = phi > plo
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        if (pl(mid) < target) == increasing:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 def position_entry_iv(pos: dict, closes: list[tuple[str, float]]) -> float | None:
     """Reconstruct a position's entry IV from its short leg's fill and the underlying's
     close on the open day. `closes` is the (date, close) series. None if inputs missing."""

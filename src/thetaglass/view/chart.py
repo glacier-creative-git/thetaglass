@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import plotille
 
 from thetaglass.state.baseline import expected_pl_pct
+from thetaglass.state.blackscholes import underlying_for_profit
 
 # rgb line colors (plotille color_mode="rgb")
 C_UNDER = (80, 150, 245)     # underlying daily-close price — blue
@@ -158,8 +159,6 @@ def render_underlying_chart(pos: dict, history: list[dict],
     dte0 = pos.get("dte_at_open") or 1
     legs = pos["legs"]
     short = next((l for l in legs if l["side"] == "short"), legs[0])
-    long = next((l for l in legs if l["side"] == "long"), None)
-    is_put = short["option_type"] == "put"
 
     # real daily closes from open onward, plus the live spot so the line reaches NOW. The
     # open-day bar is timestamped 00:00 (before an intraday fill), so filter by DATE and
@@ -172,35 +171,50 @@ def render_underlying_chart(pos: dict, history: list[dict],
         pts.append((now_x, spot))
     spot = spot or (pts[-1][1] if pts else short["strike"])
 
-    profit_k = short["strike"]                       # stay on the safe side → keep the credit
-    loss_k = long["strike"] if long else None        # past this → full max loss
-    credit_ps = (pos.get("credit_received") or 0.0) / (100 * abs(short["quantity"] or 1))
-    break_even = profit_k - credit_ps if is_put else profit_k + credit_ps
-
-    levels = [profit_k, spot, break_even] + ([loss_k] if loss_k else [])
     prices = [c for _, c in pts]
-    lo, hi = min(levels + prices), max(levels + prices)
-    pad = (hi - lo) * 0.12 or 1.0
+    iv = pos.get("iv_now") or pos.get("iv_at_entry") or 0.25
+    credit = pos.get("credit_received") or 0.0
+    max_profit = pos.get("max_profit") or credit or 1.0
+
+    # Profit-% edges, from NOW to expiry: what the underlying must reach, EACH day, for the
+    # spread to be worth X% of max profit (Black-Scholes run backwards, flat IV). They start
+    # spread out at NOW and converge toward the strikes at expiry — watch the price line
+    # climb toward the green (max-profit) edge: when it touches, you can close for ~max.
+    edge_specs = [(0.9, C_PROFIT), (0.5, C_BE_GREY), (0.0, C_LOSS)]
+    n = 32
+    curves = []
+    for f, color in edge_specs:
+        cur = []
+        for i in range(n + 1):
+            x = now_x + (dte0 - now_x) * i / n
+            s = underlying_for_profit(legs, credit, max_profit, f,
+                                      max(0.0, dte0 - x) / 365.0, iv)
+            if s is not None:
+                cur.append((x, s))
+        curves.append((cur, color))
+
+    edge_ys = [s for cur, _ in curves for _, s in cur]
+    ys_all = prices + edge_ys + [spot]
+    lo, hi = min(ys_all), max(ys_all)
+    pad = (hi - lo) * 0.08 or 1.0
 
     fig = _new_fig(width, height, dte0, "$")
     fig.set_y_limits(min_=lo - pad, max_=hi + pad)
     fig.x_label = "days to exp"
     fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
-    # the three levels that decide the trade
-    fig.plot([0, dte0], [profit_k, profit_k], lc=C_PROFIT)
-    if loss_k:
-        fig.plot([0, dte0], [loss_k, loss_k], lc=C_LOSS)
-    fig.plot([0, dte0], [break_even, break_even], lc=C_BE_GREY)
-
-    # the real price line (blue), drawn last so it sits on top of the levels
+    for cur, color in curves:
+        if cur:
+            fig.plot([x for x, _ in cur], [s for _, s in cur], lc=color)
+    # the real price line (blue), drawn last so it sits on top
     if pts:
         fig.plot([x for x, _ in pts], prices, lc=C_UNDER)
 
+    g_now = curves[0][0][0][1] if curves[0][0] else spot   # 90% edge at NOW
     title = (f" UNDERLYING  {pos['underlying']}  spot ${spot:g}   "
-             f"profit edge {profit_k:g}   break-even {break_even:.2f}")
-    key = _key((f"{pos['underlying']} price", C_UNDER), ("profit edge", C_PROFIT),
-               ("max-loss edge", C_LOSS), ("break-even", C_BE_GREY))
+             f"max-profit edge ${g_now:.0f}→{short['strike']:g} (now→exp)")
+    key = _key((f"{pos['underlying']} price", C_UNDER), ("90% (max) profit", C_PROFIT),
+               ("50% profit", C_BE_GREY), ("break-even 0%", C_LOSS))
     return title + "\n " + key + "\n" + fig.show()
 
 
