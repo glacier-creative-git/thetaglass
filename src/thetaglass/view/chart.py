@@ -53,13 +53,29 @@ def _context(pos: dict, history: list[dict]):
     return open_dt, dte0, xs_real, now_x
 
 
+# plotille frames the braille canvas with a y-label gutter (left, ~14) and a "> (x)"
+# suffix (right, ~8). `width`/`height` are the CELL's content box; reserve the frame so
+# lines never exceed the cell and wrap. We render our own compact colored key instead of
+# plotille's multi-line legend, so the only vertical overhead is the axis frame + 2 lines.
+_X_GUTTER = 24
+_Y_GUTTER = 6
+
+
 def _new_fig(width: int, height: int, dte0: float, ylabel: str) -> plotille.Figure:
     fig = plotille.Figure()
-    fig.width, fig.height = max(40, width), max(6, height)
+    fig.width = max(30, width - _X_GUTTER)
+    fig.height = max(6, height - _Y_GUTTER)
     fig.color_mode = "rgb"
     fig.x_label, fig.y_label = "day", ylabel
     fig.set_x_limits(min_=0, max_=dte0)
+    fig.y_ticks_fkt = lambda v, _: f"{v:,.0f}"      # whole dollars / prices, no 10-digit noise
+    fig.x_ticks_fkt = lambda v, _: f"{v:.0f}"       # whole days
     return fig
+
+
+def _key(*items: tuple[str, tuple[int, int, int]]) -> str:
+    """A compact one-line color key (ANSI rgb), replacing plotille's tall legend."""
+    return "  ".join(f"\x1b[38;2;{r};{g};{b}m{lab}\x1b[0m" for lab, (r, g, b) in items)
 
 
 # --------------------------------------------------------------------------- P/L
@@ -87,7 +103,9 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
 
     title = (f" P/L (up = made money)    max profit ${max_profit:g}   "
              f"max loss ${max_loss:g}   day {now_x:.0f}/{dte0}")
-    return title + "\n" + fig.show(legend=True)
+    key = _key(("realized", C_REAL), ("on-track √t", C_SQRT),
+               ("linear max-profit", C_BEST), ("linear max-loss", C_WORST))
+    return title + "\n " + key + "\n" + fig.show()
 
 
 # -------------------------------------------------------------------- underlying
@@ -133,4 +151,6 @@ def render_underlying_chart(pos: dict, history: list[dict],
 
     title = (f" UNDERLYING  {pos['underlying']}  spot ${spot:g}   "
              f"profit edge {profit_k:g}   break-even {break_even:.2f}")
-    return title + "\n" + fig.show(legend=True)
+    key = _key((f"{pos['underlying']} price", C_UNDER), ("profit edge", C_PROFIT),
+               ("max-loss edge", C_LOSS), ("break-even", C_BE), ("cone→exp", C_CONE))
+    return title + "\n " + key + "\n" + fig.show()

@@ -84,8 +84,17 @@ class MonitorApp(App):
         und = render_underlying_chart(pos, hist, width=max(60, und_w.size.width - 2),
                                       height=max(10, und_w.size.height - 1))
         self.current_chart_text = pnl + und
-        pnl_w.update(Text.from_ansi(pnl))
-        und_w.update(Text.from_ansi(und))
+        pnl_w.update(_nowrap(pnl))
+        und_w.update(_nowrap(und))
+
+
+def _nowrap(ansi: str) -> Text:
+    """Wrap a plotille string for a widget WITHOUT letting Rich re-wrap long braille
+    rows (which would scramble the y-axis). Overflow is cropped instead."""
+    t = Text.from_ansi(ansi)
+    t.no_wrap = True
+    t.overflow = "crop"
+    return t
 
 
 def run_monitor(entries: list[Entry]) -> None:
