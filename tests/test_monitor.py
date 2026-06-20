@@ -11,7 +11,7 @@ from rich.console import Console
 
 from thetaglass.mock import MOCK_PREFIX, make_mock_book, make_mock_position
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import render_position_chart
+from thetaglass.view.chart import render_pnl_chart, render_underlying_chart
 from thetaglass.view.monitor import MonitorApp
 
 BRAILLE = range(0x2800, 0x28FF + 1)
@@ -43,12 +43,20 @@ def test_mock_book_is_distinct():
     assert len(book) == 3 and len(syms) == 3
 
 
-def test_chart_renders_braille():
+def test_pnl_chart_renders_cone():
     pos, hist = make_mock_position()
-    s = render_position_chart(pos, hist, width=90, height=24)
+    s = render_pnl_chart(pos, hist, width=90, height=18)
     assert _has_braille(s)
-    assert "UNDERLYING" in s and "P/L" in s
+    assert "P/L" in s
     assert "on-track" in s and "max loss" in s          # the cone legend
+
+
+def test_underlying_chart_shows_edges():
+    pos, hist = make_mock_position()
+    s = render_underlying_chart(pos, hist, width=90, height=18)
+    assert _has_braille(s)
+    assert "UNDERLYING" in s and pos["underlying"] in s
+    assert "profit edge" in s and "break-even" in s     # the outcome edges, not a flat strike
 
 
 def test_card_contains_key_metrics():
