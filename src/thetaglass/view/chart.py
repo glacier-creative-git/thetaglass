@@ -27,6 +27,7 @@ C_PROFIT = (95, 200, 120)    # profit edge / max profit — green
 C_LOSS = (215, 95, 95)       # loss edge / max loss — red
 C_BE = (230, 205, 95)        # break-even — amber
 C_REAL = (120, 230, 150)     # realized P/L — bright green
+C_BACKFILL = (95, 150, 245)  # estimated pre-watch P/L (linear bridge) — blue
 C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
 C_ZERO = (110, 110, 120)     # break-even / reference — grey
@@ -115,16 +116,27 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
         fig.plot(xs_f, bot, lc=C_WORST, label="max-loss")
         fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
 
-    # realized P/L: open → NOW (the only line left of NOW), drawn last so it sits on top
+    # Backfill: if we started watching after the position opened, bridge the gap with a
+    # straight, clearly-BLUE line from break-even at open ($0) to the first real reading.
+    # We know the entry exactly (credit_received → $0 P/L at open), so this fabricates
+    # nothing about the unseen daily path — it's an honest, visibly-flagged estimate.
+    xs_y = xs_real[:len(ys)]
+    backfilled = bool(ys) and xs_y[0] > 0.5
+    if backfilled:
+        fig.plot([0.0, xs_y[0]], [0.0, ys[0]], lc=C_BACKFILL, label="backfill (est.)")
+
+    # realized P/L: first sync → NOW (drawn last so it sits on top at the junction)
     if ys:
-        fig.plot(xs_real[:len(ys)], ys, lc=C_REAL, label="realized P/L")
+        fig.plot(xs_y, ys, lc=C_REAL, label="realized P/L")
 
     dte_now = dte0 - now_x
     title = (f" P/L (up = made money)    max profit ${max_profit:g}   "
              f"max loss ${max_loss:g}   DTE {dte_now:.0f}/{dte0}")
-    key = _key(("realized", C_REAL), ("on-track √t (cone top)", C_SQRT),
-               ("max-loss (cone bottom)", C_WORST))
-    return title + "\n " + key + "\n" + fig.show()
+    key_items = [("realized", C_REAL)]
+    if backfilled:
+        key_items.append(("backfill", C_BACKFILL))
+    key_items += [("on-track √t (cone top)", C_SQRT), ("max-loss (cone bottom)", C_WORST)]
+    return title + "\n " + _key(*key_items) + "\n" + fig.show()
 
 
 # -------------------------------------------------------------------- underlying

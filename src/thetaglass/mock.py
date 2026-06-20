@@ -21,12 +21,14 @@ MOCK_PREFIX = "MOCK"
 
 
 def _history_for(pos: Position, opened: datetime, now: datetime, *,
-                 spot_open: float, spot_drift: float, vol: float, seed: int) -> list[dict]:
+                 spot_open: float, spot_drift: float, vol: float, seed: int,
+                 start_day: int = 0) -> list[dict]:
     """Walk day-by-day from open to now, producing snapshot rows like the store's.
 
     The underlying random-walks with a drift toward (or away from) the short strike, and
     P/L is recomputed from a value that decays along the √time curve plus noise — so the
-    realized line looks like a real, slightly noisy decay path.
+    realized line looks like a real, slightly noisy decay path. `start_day` > 0 simulates
+    only starting to watch a few days after open (so the chart shows a backfill bridge).
     """
     rng = random.Random(seed)
     short = pos.short_leg
@@ -35,6 +37,8 @@ def _history_for(pos: Position, opened: datetime, now: datetime, *,
     spot = spot_open
     for d in range(days + 1):
         spot += spot_drift + rng.uniform(-vol, vol)
+        if d < start_day:
+            continue
         dte_remaining = pos.dte_at_open - d
         exp_pct = expected_pl_pct(dte_remaining, pos.dte_at_open)
         # realized P/L tracks the baseline with a little wander, clamped to the envelope.
@@ -66,7 +70,7 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
                        drift: float = -0.7, vol: float = 1.4, seed: int = 42,
                        days_open: int = 18, dte_at_open: int = 45,
                        short_avg: float = -540.0, long_avg: float = 420.0,
-                       short_iv: float = 0.196) -> tuple[dict, list[dict]]:
+                       short_iv: float = 0.196, synced_after: int = 3) -> tuple[dict, list[dict]]:
     """A believable put credit spread. Returns (position_dict, history_rows) shaped
     exactly like positions_current / snapshots so views can't tell it from live data."""
     now = now or datetime.now(timezone.utc)
@@ -89,7 +93,7 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
     pos.iv_at_entry = short.iv
 
     hist = _history_for(pos, opened, now, spot_open=spot_open, spot_drift=drift,
-                        vol=vol, seed=seed)
+                        vol=vol, seed=seed, start_day=synced_after)
     last = hist[-1]
     compute.recompute_live(pos, last["underlying_price"], last["dte_remaining"])
     d = pos.to_dict()
@@ -99,11 +103,14 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
 
 # Preset variants so the monitor (and tests) can show a multi-position book.
 _BOOK_PRESETS = [
-    dict(symbol="SPY", short_k=665, long_k=660, spot_open=678.0, drift=-0.7, seed=42),
+    dict(symbol="SPY", short_k=665, long_k=660, spot_open=678.0, drift=-0.7, seed=42,
+         synced_after=3),
     dict(symbol="IWM", short_k=205, long_k=200, spot_open=214.0, drift=0.25, seed=7,
-         days_open=9, dte_at_open=38, short_avg=-180.0, long_avg=120.0, short_iv=0.232),
+         days_open=9, dte_at_open=38, short_avg=-180.0, long_avg=120.0, short_iv=0.232,
+         synced_after=2),
     dict(symbol="NVDA", short_k=118, long_k=115, spot_open=131.0, drift=-0.55, seed=99,
-         days_open=25, dte_at_open=30, short_avg=-260.0, long_avg=170.0, short_iv=0.41),
+         days_open=25, dte_at_open=30, short_avg=-260.0, long_avg=170.0, short_iv=0.41,
+         synced_after=6),
 ]
 
 

@@ -51,6 +51,17 @@ def test_pnl_chart_renders_cone():
     assert "on-track" in s and "max loss" in s          # the cone legend
 
 
+def test_pnl_chart_backfills_gap_in_blue():
+    # started watching 4 days after open → a blue backfill bridge is drawn + keyed
+    pos, hist = make_mock_position(synced_after=4)
+    assert min(h["dte_remaining"] for h in hist) < pos["dte_at_open"]  # history starts late
+    s = render_pnl_chart(pos, hist, width=90, height=18)
+    assert "backfill" in s
+    # contiguous history (watched from open) → no backfill line
+    pos2, hist2 = make_mock_position(synced_after=0)
+    assert "backfill" not in render_pnl_chart(pos2, hist2, width=90, height=18)
+
+
 def test_underlying_chart_shows_edges():
     pos, hist = make_mock_position()
     s = render_underlying_chart(pos, hist, width=90, height=18)
