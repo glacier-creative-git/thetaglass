@@ -253,9 +253,9 @@ def backfill():
 
 @app.command("monitor")
 def monitor(
-    mock: bool = typer.Option(None, "--mock/--no-mock",
-                              help="Include a synthetic position. Default: auto-add when "
-                                   "fewer than two real positions exist."),
+    mock: int = typer.Option(None, "--mock",
+                             help="Add N demo positions (default: 1 when you have fewer "
+                                  "than 2 real; try --mock 6 to exercise the list)."),
 ):
     """Interactive drill-down dashboard: ↑/↓ to select a position, chart updates live.
 
@@ -289,10 +289,10 @@ def monitor(
                 pass
             entries.append((p, hist, closes))
 
-    add_mock = mock if mock is not None else (len(entries) < 2)
-    if add_mock:
-        entries += make_mock_book(1)
-        rprint("[dim]Including a MOCK position for demonstration.[/dim]")
+    n_mock = mock if mock is not None else (1 if len(entries) < 2 else 0)
+    if n_mock > 0:
+        entries += make_mock_book(n_mock)
+        rprint(f"[dim]Including {n_mock} MOCK position(s) for demonstration.[/dim]")
     if not entries:
         rprint("[yellow]No positions to show. Run `tg sync` or use --mock.[/yellow]")
         raise typer.Exit()

@@ -89,7 +89,6 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
                        short_k: float = 665, long_k: float = 660, spot_open: float = 678.0,
                        drift: float = -0.7, vol: float = 1.4, seed: int = 42,
                        days_open: int = 18, dte_at_open: int = 45,
-                       short_avg: float = -540.0, long_avg: float = 420.0,
                        short_iv: float = 0.196, synced_after: int = 3) -> tuple[dict, list[dict]]:
     """A believable put credit spread. Returns (position_dict, history_rows) shaped
     exactly like positions_current / snapshots so views can't tell it from live data."""
@@ -97,11 +96,19 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
     opened = now - timedelta(days=days_open)
     exp = (opened + timedelta(days=dte_at_open)).date().isoformat()
 
+    # Price the entry fills with BS at open, so credit = the real spread value and the
+    # BS-priced P/L starts at ~0 (rather than an artificial day-1 loss from a mismatched
+    # hardcoded credit).
+    t0 = dte_at_open / 365.0
+    short_fill = bs_price("put", spot_open, short_k, t0, R, short_iv)
+    long_fill = bs_price("put", spot_open, long_k, t0, R, short_iv + 0.01)
     short = Leg(option_id=f"MOCK-{symbol}-S", side="short", option_type="put", strike=short_k,
-                quantity=1, expiration=exp, average_price=short_avg, mark=4.1, iv=short_iv,
+                quantity=1, expiration=exp, average_price=-round(short_fill * 100, 2),
+                mark=round(short_fill, 4), iv=short_iv,
                 delta=-0.31, gamma=0.006, theta=-0.21, vega=0.62)
     long = Leg(option_id=f"MOCK-{symbol}-L", side="long", option_type="put", strike=long_k,
-               quantity=1, expiration=exp, average_price=long_avg, mark=3.0, iv=short_iv + 0.01,
+               quantity=1, expiration=exp, average_price=round(long_fill * 100, 2),
+               mark=round(long_fill, 4), iv=short_iv + 0.01,
                delta=-0.24, gamma=0.005, theta=-0.18, vega=0.55)
 
     pos = Position(position_id=f"{MOCK_PREFIX}-{symbol}-{short_k:g}-{long_k:g}",
@@ -132,14 +139,18 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
 _BOOK_PRESETS = [
     # a winning put credit spread: SPY rallied up into the 50–90% profit-taking band,
     # so the price line sits between the grey (50%) and green (90%) edges of the cone.
-    dict(symbol="SPY", short_k=665, long_k=660, spot_open=694.0, drift=1.3, seed=42,
+    dict(symbol="SPY", short_k=665, long_k=660, spot_open=694.0, drift=2.0, seed=42,
          synced_after=3),
     dict(symbol="IWM", short_k=205, long_k=200, spot_open=214.0, drift=0.25, seed=7,
-         days_open=9, dte_at_open=38, short_avg=-180.0, long_avg=120.0, short_iv=0.232,
-         synced_after=2),
+         days_open=9, dte_at_open=38, short_iv=0.232, synced_after=2),
     dict(symbol="NVDA", short_k=118, long_k=115, spot_open=131.0, drift=-0.55, seed=99,
-         days_open=25, dte_at_open=30, short_avg=-260.0, long_avg=170.0, short_iv=0.41,
-         synced_after=6),
+         days_open=25, dte_at_open=30, short_iv=0.41, synced_after=6),
+    dict(symbol="AAPL", short_k=245, long_k=240, spot_open=252.0, drift=0.3, seed=11,
+         days_open=12, dte_at_open=40, short_iv=0.28, synced_after=2),
+    dict(symbol="TSLA", short_k=400, long_k=390, spot_open=412.0, drift=-1.5, seed=23,
+         days_open=22, dte_at_open=45, short_iv=0.55, synced_after=5),
+    dict(symbol="AMD", short_k=165, long_k=160, spot_open=171.0, drift=0.4, seed=31,
+         days_open=8, dte_at_open=30, short_iv=0.45, synced_after=1),
 ]
 
 

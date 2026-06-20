@@ -43,13 +43,13 @@ class MonitorApp(App):
     # TODO(adaptive): on narrow terminals the cells get cramped; could switch to a
     # stacked single column below a width breakpoint. Stubbed for now.
     CSS = """
-    #charts   { height: 4fr; }
+    #charts   { height: 3fr; }
     .chartrow { height: 1fr; }
     #pnl, #under, #ivrv, #empty {
         width: 1fr; height: 100%; border: round $accent; padding: 0 1;
     }
     #empty { color: $text-muted; content-align: center middle; }
-    #plist { height: 1fr; min-height: 6; border: round $accent; }
+    #plist { height: 1fr; min-height: 8; border: round $accent; scrollbar-size: 1 1; }
     PositionItem { padding: 0 1; height: auto; }
     ListView > PositionItem.--highlight { background: $boost; }
     """
@@ -79,7 +79,8 @@ class MonitorApp(App):
         self.query_one("#under", Static).border_title = "Underlying"
         self.query_one("#ivrv", Static).border_title = "Implied Vol vs entry"
         self.query_one("#empty", Static).border_title = "—"
-        self.query_one("#plist", ListView).border_title = "Positions  (↑/↓ select · q quit)"
+        self.query_one("#plist", ListView).border_title = (
+            f"Positions ({len(self.entries)})  ↑/↓ select · q quit")
         plist = self.query_one("#plist", ListView)
         plist.focus()
         if self.entries:

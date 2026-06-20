@@ -106,6 +106,27 @@ def test_rv_series_grows_with_history():
     assert series and all(v > 0 for _d, v in series)
 
 
+def test_mock_book_scales_to_distinct_positions():
+    book = make_mock_book(6)
+    syms = {pos["underlying"] for pos, _h, _c in book}
+    assert len(book) == 6 and len(syms) == 6      # six distinct demo positions
+
+
+def test_nav_scrolls_through_full_book():
+    entries = make_mock_book(6)
+
+    async def scenario():
+        app = MonitorApp(entries)
+        async with app.run_test(size=(150, 44)) as pilot:
+            await pilot.pause()
+            for _ in range(5):                      # step from 0 → 5
+                await pilot.press("down")
+                await pilot.pause()
+            assert app.current_idx == 5             # reached the last, list scrolled to it
+
+    asyncio.run(scenario())
+
+
 def test_arrow_nav_switches_chart():
     entries = make_mock_book(2)
 
