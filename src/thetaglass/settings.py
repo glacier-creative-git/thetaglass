@@ -38,5 +38,12 @@ class Config:
     # --- lifecycle ---
     CLOSE_GRACE_TICKS = 2          # consecutive missing ticks before marking closed
 
+    # --- timekeeper (Clock 1) ---
+    TICK_SECONDS = 300             # beat between syncs while the market is open (5 min)
+    MARKET_TZ = "America/New_York" # US equity-options session timezone
+    MARKET_OPEN = "09:30"          # regular session open (local market time)
+    MARKET_CLOSE = "16:00"         # regular session close
+    CLOSED_SLEEP_CAP = 1800        # max nap while market is shut, so we re-check ≥ /30min
+
 
 CONFIG = Config()

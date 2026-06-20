@@ -140,6 +140,22 @@ def sync(
         rprint(f"  {p.underlying} {p.strategy_type}  health [bold]{p.health_score}[/bold]")
 
 
+@app.command("run")
+def run(
+    once: bool = typer.Option(False, "--once", help="Run a single tick and exit "
+                              "(fires regardless of market hours; for testing/cron)."),
+):
+    """Start the Timekeeper heartbeat (Clock 1). PM2 supervises this in production.
+
+    While the market is open it syncs every TICK_SECONDS and appends history; when
+    closed it sleeps until the next session. State lives in the store, so it's safe to
+    restart at any time.
+    """
+    from thetaglass.timekeeper import run as run_timekeeper
+
+    run_timekeeper(once=once)
+
+
 @app.command("status")
 def status():
     """Show the latest persisted state of every open position (reads the store).
