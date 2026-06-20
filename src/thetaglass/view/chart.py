@@ -100,35 +100,38 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     ys = [h["pl_dollars"] for h in history if h.get("pl_dollars") is not None]
     realized_now = ys[-1] if ys else (pos.get("pl_dollars") or 0.0)
 
-    # The cone is a FORECAST, so it starts at NOW (anchored to the current realized value)
-    # and fans to expiration — NOT from open. That leaves the realized line alone on the
-    # left edge, fully visible, instead of buried under three lines converging on $0.
+    # The cone is a FORECAST: it starts at NOW (anchored to the current realized value)
+    # and fans to expiration — NOT from open. Compute it here; draw it in a careful order
+    # below. top = √time path up to max profit; bot = linear bleed down to max loss.
+    xs_f = top = bot = None
     if now_x < dte0:
         n = 48
         xs_f = [now_x + (dte0 - now_x) * i / n for i in range(n + 1)]
         e_now = expected_pl_pct(dte0 - now_x, dte0)
         denom = (1.0 - e_now) or 1.0
-        # top: √time path from where we are now up to max profit at expiry
         top = [realized_now + (max_profit - realized_now) *
                ((expected_pl_pct(dte0 - x, dte0) - e_now) / denom) for x in xs_f]
-        # bottom: linear bleed from here down to max loss at expiry
         bot = [realized_now + (-max_loss - realized_now) *
                ((x - now_x) / (dte0 - now_x)) for x in xs_f]
-        fig.plot(xs_f, bot, lc=C_WORST, label="max-loss")
-        fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
 
-    # Backfill: if we started watching after the position opened, bridge the gap with a
-    # straight, clearly-BLUE line from break-even at open ($0) to the first real reading.
-    # We know the entry exactly (credit_received → $0 P/L at open), so this fabricates
-    # nothing about the unseen daily path — it's an honest, visibly-flagged estimate.
+    # Backfill: if we started watching after open, bridge the gap with a straight, clearly
+    # BLUE line from break-even at open ($0) to the first real reading. We know the entry
+    # exactly (credit_received → $0 P/L), so this fabricates nothing — an honest estimate.
     xs_y = xs_real[:len(ys)]
     backfilled = bool(ys) and xs_y[0] > 0.5
+
+    # Draw order matters — one color per braille cell. The green √t top and red max-loss
+    # bottom share cells near the cone tip (both start at the same positive value), so we
+    # draw the red max-loss line LAST: the danger line then wins every shared cell and
+    # always reads red, never green.
+    if top is not None:
+        fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
     if backfilled:
         fig.plot([0.0, xs_y[0]], [0.0, ys[0]], lc=C_BACKFILL, label="backfill (est.)")
-
-    # realized P/L: first sync → NOW (drawn last so it sits on top at the junction)
     if ys:
         fig.plot(xs_y, ys, lc=C_REAL, label="realized P/L")
+    if bot is not None:
+        fig.plot(xs_f, bot, lc=C_WORST, label="max-loss")
 
     dte_now = dte0 - now_x
     title = (f" P/L (up = made money)    max profit ${max_profit:g}   "
