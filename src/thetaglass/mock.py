@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from thetaglass.state import compute
 from thetaglass.state.baseline import expected_pl_pct
+from thetaglass.state.blackscholes import R, bs_price, spread_cost_to_close
 from thetaglass.state.models import Leg, Position
 
 MOCK_PREFIX = "MOCK"
@@ -33,6 +34,9 @@ def _history_for(pos: Position, opened: datetime, now: datetime, *,
     rng = random.Random(seed)
     short = pos.short_leg
     base_iv = short.iv or 0.25
+    legs_d = [{"side": l.side, "option_type": l.option_type, "strike": l.strike,
+               "quantity": l.quantity} for l in pos.legs]
+    credit, mp = pos.credit_received, pos.max_profit
     rows: list[dict] = []
     days = max(1, (now.date() - opened.date()).days)
     spot = spot_open
@@ -45,17 +49,18 @@ def _history_for(pos: Position, opened: datetime, now: datetime, *,
             continue
         dte_remaining = pos.dte_at_open - d
         exp_pct = expected_pl_pct(dte_remaining, pos.dte_at_open)
-        # realized P/L tracks the baseline with a little wander, clamped to the envelope.
-        noise = rng.uniform(-0.08, 0.08)
-        pl_pct = max(-(pos.max_loss / pos.max_profit), min(1.0, exp_pct + noise))
-        pl_dollars = round(pl_pct * pos.max_profit, 2)
+        # realized P/L is the REAL spread value at this price/time (BS), so the P/L cell
+        # agrees with where the price sits in the underlying cell's profit-edge cone.
+        cost = spread_cost_to_close(legs_d, spot, max(0.0, dte_remaining) / 365.0, max(0.05, iv))
+        pl_dollars = round(credit - cost, 2)
+        pl_pct = pl_dollars / mp if mp else 0.0
         dist = compute.distance_to_short_strike_pct(short, spot)
         rows.append({
             "tick_at": (opened + timedelta(days=d)).isoformat(),
             "is_daily_close": 1,
             "dte_remaining": dte_remaining,
             "underlying_price": round(spot, 2),
-            "current_value": round(pos.credit_received - pl_dollars, 2),
+            "current_value": round(cost, 2),
             "pl_dollars": pl_dollars,
             "pl_pct_of_max_profit": round(pl_pct, 4),
             "expected_pl_pct": round(exp_pct, 4),
@@ -110,6 +115,13 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
     hist = _history_for(pos, opened, now, spot_open=spot_open, spot_drift=drift,
                         vol=vol, seed=seed, start_day=synced_after)
     last = hist[-1]
+    # price each leg via BS at the final state so the pos SUMMARY (Greeks-free) matches the
+    # BS-priced history rows — otherwise recompute_live uses the static creation marks.
+    t_final = max(0.0, last["dte_remaining"]) / 365.0
+    for l in pos.legs:
+        l.iv = last["iv_now"]
+        l.mark = round(bs_price(l.option_type, last["underlying_price"], l.strike,
+                                t_final, R, last["iv_now"]), 4)
     compute.recompute_live(pos, last["underlying_price"], last["dte_remaining"])
     d = pos.to_dict()
     d["is_mock"] = True
@@ -118,7 +130,9 @@ def make_mock_position(now: datetime | None = None, *, symbol: str = "SPY",
 
 # Preset variants so the monitor (and tests) can show a multi-position book.
 _BOOK_PRESETS = [
-    dict(symbol="SPY", short_k=665, long_k=660, spot_open=678.0, drift=-0.7, seed=42,
+    # a winning put credit spread: SPY rallied up into the 50–90% profit-taking band,
+    # so the price line sits between the grey (50%) and green (90%) edges of the cone.
+    dict(symbol="SPY", short_k=665, long_k=660, spot_open=694.0, drift=1.3, seed=42,
          synced_after=3),
     dict(symbol="IWM", short_k=205, long_k=200, spot_open=214.0, drift=0.25, seed=7,
          days_open=9, dte_at_open=38, short_avg=-180.0, long_avg=120.0, short_iv=0.232,
