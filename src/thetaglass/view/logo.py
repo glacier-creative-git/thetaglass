@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 import sys
+from functools import lru_cache
 
 # Per-preset geometry (px space is 2×4 the braille-cell grid). idx/idy inset the oval to
 # give the inner radii the hourglass + sand attach to.
@@ -170,6 +171,21 @@ def colored_lines(variant: str = "compact", fill_top: float = 1.0, fill_bottom: 
     w = max((len(r) for r in rows), default=0)
     rows = [r + _BLANK * (w - len(r)) for r in rows]
     return colorize(rows).split("\n")
+
+
+# The sand-animation cycle: (fill_top, fill_bottom) keyframes. Starts bottom-full (sand at
+# rest in the lower chamber), drains up through the neck until the top is full, then reverses
+# — a slow back-and-forth forever. Five discrete levels matches the ~4 visible sand layers.
+SAND_CYCLE = ((0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0),
+              (0.75, 0.25), (0.5, 0.5), (0.25, 0.75))
+
+
+@lru_cache(maxsize=None)
+def compact_frame(fill_top: float = 1.0, fill_bottom: float = 1.0) -> tuple[str, ...]:
+    """One cached animation frame: the colored `compact` mark at a given sand level. The set
+    of distinct (fill_top, fill_bottom) pairs is tiny (see SAND_CYCLE), so every frame is
+    rendered once and reused — the animation is just a dict lookup per tick."""
+    return tuple(colored_lines("compact", fill_top, fill_bottom, trim=True))
 
 
 def render_mark(variant: str = "V22", color: bool = True,

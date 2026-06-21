@@ -20,6 +20,7 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from thetaglass.view.cards import render_position_card
 from thetaglass.view.chart import (render_health_chart, render_iv_chart,
                                     render_pnl_chart, render_underlying_chart)
+from thetaglass.view.logo import SAND_CYCLE
 
 # entry = (position_dict, history_rows, underlying_closes)
 Entry = tuple[dict, list[dict], list]
@@ -59,6 +60,9 @@ class MonitorApp(App):
         self.entries = entries
         self.current_idx = 0
         self.current_chart_text = ""   # pnl + underlying + ivrv strings (for testability)
+        # Sand-animation frame counter. Lives on the APP, not the position, so scrolling the
+        # list never resets it — the hourglass keeps flowing as you switch NVDA → TSLA.
+        self._anim_frame = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -85,6 +89,9 @@ class MonitorApp(App):
         if self.entries:
             plist.index = 0
             self._render_charts(0)
+        # Drive the sand back and forth. Each tick re-renders ONLY the health cell (a cached
+        # frame lookup), never the plotille charts — so it stays cheap.
+        self.set_interval(0.7, self._tick_sand)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         idx = self.query_one("#plist", ListView).index
@@ -102,12 +109,26 @@ class MonitorApp(App):
         pnl = self._draw("#pnl", render_pnl_chart, pos, hist)
         und = self._draw("#under", render_underlying_chart, pos, hist, closes)
         iv = self._draw("#ivrv", render_iv_chart, pos, hist)
-        hl = self._draw("#health", render_health_chart, pos)
+        hl = self._render_health()
         self.current_chart_text = pnl + und + iv + hl
 
-    def _draw(self, sel: str, fn, *args) -> str:
+    def _render_health(self) -> str:
+        """Draw just the health cell at the current sand frame. Called both on selection and
+        on every animation tick; reads _anim_frame (never writes it)."""
+        if not self.entries:
+            return ""
+        pos = self.entries[self.current_idx][0]
+        fill_top, fill_bottom = SAND_CYCLE[self._anim_frame % len(SAND_CYCLE)]
+        return self._draw("#health", render_health_chart, pos,
+                          fill_top=fill_top, fill_bottom=fill_bottom)
+
+    def _tick_sand(self) -> None:
+        self._anim_frame += 1
+        self._render_health()
+
+    def _draw(self, sel: str, fn, *args, **kw) -> str:
         w = self.query_one(sel, Static)
-        s = fn(*args, width=max(48, w.size.width - 2), height=max(8, w.size.height - 1))
+        s = fn(*args, width=max(48, w.size.width - 2), height=max(8, w.size.height - 1), **kw)
         w.update(_nowrap(s))
         return s
 

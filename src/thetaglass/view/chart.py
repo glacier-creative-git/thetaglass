@@ -359,7 +359,8 @@ def _bar_rows(vals: dict, weakest, floored: bool, bar_w: int) -> list[str]:
     return rows
 
 
-def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
+def render_health_chart(pos: dict, width: int = 90, height: int = 16,
+                        fill_top: float = 1.0, fill_bottom: float = 1.0) -> str:
     """The weighted health score as a SNAPSHOT scoreboard, with the Thetaglass mark beside
     it. The other three cells already carry each axis's history, so this cell is the brand +
     the blended number + the three 0–1 axes as bars (weakest-link floor flagged). The θ /
@@ -380,7 +381,8 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
         floor_note = _c(f"⚠ floored by {dict((k, l) for k, l, _ in _AXES)[weakest]}", C_BAD)
 
     # Show the mark only when the cell is roomy enough; otherwise center the scoreboard.
-    logo = _logo.colored_lines("compact") if (width >= 52 and height >= 13) else None
+    logo = (list(_logo.compact_frame(fill_top, fill_bottom))
+            if (width >= 52 and height >= 13) else None)
     logo_w = _vlen(logo[0]) if logo else 0
     inner = max(28, width - logo_w - 3)
     bar_w = max(10, min(26, inner - 24))
