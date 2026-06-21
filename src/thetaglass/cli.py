@@ -299,6 +299,41 @@ def monitor(
     run_monitor(entries)
 
 
+@app.command("history")
+def history(
+    mock: int = typer.Option(None, "--mock",
+                             help="Add N demo CLOSED positions (default: 2 when you have "
+                                  "no real closed history yet)."),
+):
+    """Frozen receipts for CLOSED positions: the monitor's depth, as-of the moment each closed.
+
+    Same ↑/↓ drill-down as `tg monitor`, but every cell is a snapshot frozen at close — the
+    final decay cone, underlying path, IV, and a health scoreboard whose hourglass shows how
+    far the position ran. A CLOSED banner carries the terminal outcome and final P/L. Reads
+    only the store (no broker/backfill), so it works offline.
+    """
+    from thetaglass.mock import closes_from_history, make_mock_closed_book
+    from thetaglass.store import Store
+    from thetaglass.view.monitor import run_history
+
+    with Store() as store:
+        entries = []
+        for p in store.closed_positions():
+            hist = store.history(p["position_id"])
+            closes = store.equity_closes(p["underlying"]) or closes_from_history(hist)
+            entries.append((p, hist, closes))
+
+    n_mock = mock if mock is not None else (2 if not entries else 0)
+    if n_mock > 0:
+        entries += make_mock_closed_book(n_mock)
+        rprint(f"[dim]Including {n_mock} MOCK closed position(s) for demonstration.[/dim]")
+    if not entries:
+        rprint("[yellow]No closed positions yet. They appear here once a position leaves "
+               "your book.[/yellow]")
+        raise typer.Exit()
+    run_history(entries)
+
+
 @app.command("status")
 def status():
     """The overview: a Gantt timeline of every open position (reads the store).

@@ -55,6 +55,14 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA_SQL)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Idempotent column adds for DBs created before a schema change (CREATE TABLE IF
+        NOT EXISTS won't add columns to a table that already exists)."""
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(positions)")}
+        if "final_snapshot_json" not in have:
+            self.conn.execute("ALTER TABLE positions ADD COLUMN final_snapshot_json TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -181,10 +189,19 @@ class Store:
         for r in missing:
             n = (r["miss_count"] or 0) + 1
             if n >= CONFIG.CLOSE_GRACE_TICKS:
+                # Freeze the last known full Position as the receipt BEFORE we drop it from
+                # positions_current — that row is the most recent complete state we have.
+                cur = self.conn.execute(
+                    "SELECT snapshot_json FROM positions_current WHERE position_id=?",
+                    (r["position_id"],),
+                ).fetchone()
+                final_json = cur["snapshot_json"] if cur else None
                 self.conn.execute(
                     """UPDATE positions SET state='closed', closed_at=?,
-                       terminal_outcome=?, miss_count=? WHERE position_id=?""",
-                    (tick_at, self._infer_outcome(r["position_id"]), n, r["position_id"]),
+                       terminal_outcome=?, final_snapshot_json=?, miss_count=?
+                       WHERE position_id=?""",
+                    (tick_at, self._infer_outcome(r["position_id"]), final_json, n,
+                     r["position_id"]),
                 )
                 self.conn.execute(
                     "DELETE FROM positions_current WHERE position_id=?", (r["position_id"],)
@@ -215,6 +232,36 @@ class Store:
             "SELECT snapshot_json FROM positions_current ORDER BY position_id"
         ).fetchall()
         return [json.loads(r["snapshot_json"]) for r in rows]
+
+    def closed_positions(self) -> list[dict]:
+        """Frozen receipts for every closed position, newest first. Each is the full
+        as-of-close Position dict (from the freeze in `_mark_absent`, falling back to the
+        last daily-close snapshot) with the lifecycle fields — state, closed_at,
+        terminal_outcome — merged on for the receipt header."""
+        rows = self.conn.execute(
+            """SELECT position_id, state, closed_at, terminal_outcome, final_snapshot_json
+               FROM positions WHERE state='closed' ORDER BY closed_at DESC, position_id"""
+        ).fetchall()
+        out = []
+        for r in rows:
+            blob = r["final_snapshot_json"] or self._last_full_snapshot(r["position_id"])
+            if not blob:
+                continue                 # no reconstructable state (shouldn't happen post-freeze)
+            pos = json.loads(blob)
+            pos.update(state=r["state"], closed_at=r["closed_at"],
+                       terminal_outcome=r["terminal_outcome"])
+            out.append(pos)
+        return out
+
+    def _last_full_snapshot(self, position_id: str) -> str | None:
+        """The most recent snapshot that carries a full Position object (daily-close ticks)."""
+        r = self.conn.execute(
+            """SELECT snapshot_json FROM snapshots
+               WHERE position_id=? AND snapshot_json IS NOT NULL
+               ORDER BY tick_at DESC LIMIT 1""",
+            (position_id,),
+        ).fetchone()
+        return r["snapshot_json"] if r else None
 
     # --- equity history (backfilled underlying bars) ----------------------
 

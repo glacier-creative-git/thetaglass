@@ -142,3 +142,29 @@ def test_close_grace_window(store):
     assert row["closed_at"] == "t2"
     assert row["terminal_outcome"] in ("closed_early", "expired_max_profit")
     assert store.current_positions() == []               # dropped from the live view
+
+
+def test_close_freezes_a_full_receipt(store):
+    # closing snapshots the last full Position so `tg history` can show it as-of close
+    pos = _qqq_spread()
+    pid = pos.position_id
+    store.record_tick([pos], tick_at="t0")               # last live state captured here
+    store.record_tick([], tick_at="t1")                  # miss 1
+    store.record_tick([], tick_at="t2")                  # miss 2 -> closed + frozen
+
+    assert store.position_row(pid)["final_snapshot_json"] is not None
+
+    closed = store.closed_positions()
+    assert len(closed) == 1
+    rec = closed[0]
+    assert rec["position_id"] == pid and rec["underlying"] == "QQQ"
+    # the receipt is the FULL Position (legs/axes), not just the slim snapshot columns
+    assert "legs" in rec and "health_axes" in rec
+    # lifecycle fields are merged on for the receipt header
+    assert rec["state"] == "closed" and rec["closed_at"] == "t2"
+    assert rec["terminal_outcome"] in ("closed_early", "expired_max_profit")
+
+
+def test_closed_positions_empty_while_open(store):
+    store.record_tick([_qqq_spread()], tick_at="t0")
+    assert store.closed_positions() == []                # nothing closed yet

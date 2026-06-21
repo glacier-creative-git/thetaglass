@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS positions (
     iv_at_entry      REAL,
     closed_at        TEXT,               -- NULL while open
     terminal_outcome TEXT,               -- NULL while open
+    final_snapshot_json TEXT,            -- the full Position frozen at close (the receipt)
     miss_count       INTEGER DEFAULT 0,  -- consecutive ticks missing from feed (grace window)
     last_synced_at   TEXT
 );

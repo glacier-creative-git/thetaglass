@@ -9,7 +9,9 @@ from io import StringIO
 
 from rich.console import Console
 
-from thetaglass.mock import MOCK_PREFIX, closes_from_history, make_mock_book, make_mock_position
+from thetaglass.mock import (MOCK_PREFIX, closes_from_history, make_mock_book,
+                             make_mock_closed_book, make_mock_position)
+from thetaglass.view.monitor import _receipt_banner
 from thetaglass.state.volatility import realized_vol, rv_series
 from thetaglass.view.cards import render_position_card
 from thetaglass.view.chart import (render_health_chart, render_iv_chart, render_pnl_chart,
@@ -183,6 +185,42 @@ def test_health_chart_sand_tracks_position_life():
     fresh = render_health_chart({**pos, "dte_remaining": pos["dte_at_open"]}, width=66, height=14)
     old = render_health_chart({**pos, "dte_remaining": 0}, width=66, height=14)
     assert fresh != old                                   # the sand level reflects time elapsed
+
+
+def test_mock_closed_book_is_closed():
+    book = make_mock_closed_book(3)
+    assert len(book) == 3
+    for pos, hist, closes in book:
+        assert pos["state"] == "closed"
+        assert pos["closed_at"] and pos["terminal_outcome"]
+        assert hist and closes                            # frozen but renderable like live data
+
+
+def test_receipt_banner_summarizes_the_close():
+    pos, _hist, _closes = make_mock_closed_book(1)[0]
+    s = _receipt_banner(pos).plain
+    assert "CLOSED" in s and pos["underlying"] in s
+    assert "expired" in s or "closed early" in s          # the terminal outcome
+    assert "of max" in s                                  # final P/L vs max
+    assert pos["closed_at"][:10] in s                     # the close date
+
+
+def test_history_view_is_a_frozen_receipt_drilldown():
+    entries = make_mock_closed_book(2)
+
+    async def scenario():
+        app = MonitorApp(entries, receipt=True)
+        async with app.run_test(size=(150, 44)) as pilot:
+            await pilot.pause()
+            assert app.receipt is True
+            assert app.query_one("#receipt")             # the CLOSED banner widget is present
+            first = app.current_chart_text
+            await pilot.press("down")                    # ↑/↓ still drills down
+            await pilot.pause()
+            assert app.current_idx == 1
+            assert app.current_chart_text != first
+
+    asyncio.run(scenario())
 
 
 def test_arrow_nav_switches_chart():

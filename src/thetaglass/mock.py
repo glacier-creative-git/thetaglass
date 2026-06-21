@@ -163,3 +163,30 @@ def make_mock_book(count: int = 1,
         pos, hist = make_mock_position(now, **_BOOK_PRESETS[i % len(_BOOK_PRESETS)])
         out.append((pos, hist, closes_from_history(hist)))
     return out
+
+
+# Closed-position presets for `tg history`: each runs to (or near) expiration, then carries
+# the lifecycle stamps the store would have written at close — state, closed_at, outcome.
+_CLOSED_PRESETS = [
+    dict(symbol="SPY", short_k=665, long_k=660, spot_open=678.0, drift=1.6, seed=42,
+         days_open=45, dte_at_open=45, outcome="expired_max_profit"),     # ran full life, won
+    dict(symbol="NVDA", short_k=118, long_k=115, spot_open=131.0, drift=-1.4, seed=99,
+         days_open=21, dte_at_open=30, short_iv=0.41, outcome="closed_early"),  # bailed at 70%
+    dict(symbol="TSLA", short_k=400, long_k=390, spot_open=412.0, drift=2.2, seed=23,
+         days_open=40, dte_at_open=45, short_iv=0.55, outcome="expired_max_profit"),
+]
+
+
+def make_mock_closed_book(count: int = 2,
+                          now: datetime | None = None) -> list[tuple[dict, list[dict], list[tuple[str, float]]]]:
+    """`count` CLOSED mock entries (frozen receipts) for `tg history` / tests."""
+    out = []
+    for i in range(count):
+        preset = dict(_CLOSED_PRESETS[i % len(_CLOSED_PRESETS)])
+        outcome = preset.pop("outcome")
+        pos, hist = make_mock_position(now, **preset)
+        pos["state"] = "closed"
+        pos["closed_at"] = hist[-1]["tick_at"]
+        pos["terminal_outcome"] = outcome
+        out.append((pos, hist, closes_from_history(hist)))
+    return out

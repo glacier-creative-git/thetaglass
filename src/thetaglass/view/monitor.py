@@ -20,6 +20,13 @@ from textual.widgets import Footer, Header, ListItem, ListView, Static
 from thetaglass.view.cards import render_position_card
 from thetaglass.view.chart import (render_health_chart, render_iv_chart,
                                     render_pnl_chart, render_underlying_chart)
+from thetaglass.view.overview import _label
+
+# How a closed position's terminal_outcome reads on the receipt banner.
+_OUTCOME = {
+    "expired_max_profit": ("expired · max profit", "green"),
+    "closed_early": ("closed early", "yellow"),
+}
 
 # entry = (position_dict, history_rows, underlying_closes)
 Entry = tuple[dict, list[dict], list]
@@ -51,17 +58,23 @@ class MonitorApp(App):
     #plist { height: 1fr; min-height: 8; border: round $accent; scrollbar-size: 1 1; }
     PositionItem { padding: 0 1; height: auto; }
     ListView > PositionItem.--highlight { background: $boost; }
+    #receipt { height: 1; padding: 0 1; background: $boost; color: $text; }
     """
     BINDINGS = [("q", "quit", "Quit"), ("escape", "quit", "Quit")]
 
-    def __init__(self, entries: list[Entry]):
+    def __init__(self, entries: list[Entry], receipt: bool = False):
         super().__init__()
         self.entries = entries
         self.current_idx = 0
         self.current_chart_text = ""   # pnl + underlying + ivrv strings (for testability)
+        # receipt mode: a frozen, read-only view of CLOSED positions (`tg history`). Adds a
+        # per-position outcome banner; the cells render the as-of-close snapshot.
+        self.receipt = receipt
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
+        if self.receipt:
+            yield Static(id="receipt")
         with Vertical(id="charts"):
             with Horizontal(classes="chartrow"):
                 yield Static(id="pnl")
@@ -73,13 +86,15 @@ class MonitorApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "Thetaglass — theta-decay monitor"
+        self.title = ("Thetaglass — position history" if self.receipt
+                      else "Thetaglass — theta-decay monitor")
         self.query_one("#pnl", Static).border_title = "Position P/L"
         self.query_one("#under", Static).border_title = "Underlying"
         self.query_one("#ivrv", Static).border_title = "Implied Vol vs entry"
         self.query_one("#health", Static).border_title = "Health score"
+        kind = "Closed" if self.receipt else "Positions"
         self.query_one("#plist", ListView).border_title = (
-            f"Positions ({len(self.entries)})  ↑/↓ select · q quit")
+            f"{kind} ({len(self.entries)})  ↑/↓ select · q quit")
         plist = self.query_one("#plist", ListView)
         plist.focus()
         if self.entries:
@@ -99,6 +114,8 @@ class MonitorApp(App):
             return
         self.current_idx = idx
         pos, hist, closes = self.entries[idx]
+        if self.receipt:
+            self.query_one("#receipt", Static).update(_receipt_banner(pos))
         pnl = self._draw("#pnl", render_pnl_chart, pos, hist)
         und = self._draw("#under", render_underlying_chart, pos, hist, closes)
         iv = self._draw("#ivrv", render_iv_chart, pos, hist)
@@ -112,6 +129,28 @@ class MonitorApp(App):
         return s
 
 
+def _receipt_banner(pos: dict) -> Text:
+    """The one-line CLOSED header for a frozen position: identity · outcome · final P/L · date."""
+    label, outcome_color = _OUTCOME.get(pos.get("terminal_outcome"), ("closed", "white"))
+    pl = pos.get("pl_dollars")
+    closed = (pos.get("closed_at") or "")[:10]
+    t = Text()
+    t.append("CLOSED ", style="bold")
+    t.append(f" {_label(pos)} ", style="bold")
+    t.append(f"· {label} ", style=outcome_color)
+    if pl is not None:
+        t.append(f"· ${pl:+,.0f} ", style="green" if pl >= 0 else "red")
+        # a gain reads against max PROFIT (how much we captured); a loss against max LOSS
+        # (how deep) — dividing a loss by max profit gives a nonsense "-559% of max".
+        if pl >= 0 and pos.get("max_profit"):
+            t.append(f"({pl / pos['max_profit'] * 100:.0f}% of max profit) ", style="dim")
+        elif pl < 0 and pos.get("max_loss"):
+            t.append(f"({abs(pl) / pos['max_loss'] * 100:.0f}% of max loss) ", style="dim")
+    if closed:
+        t.append(f"· closed {closed}", style="dim")
+    return t
+
+
 def _nowrap(ansi: str) -> Text:
     """Wrap a plotille string for a widget WITHOUT letting Rich re-wrap long braille
     rows (which would scramble the y-axis). Overflow is cropped instead."""
@@ -123,3 +162,8 @@ def _nowrap(ansi: str) -> Text:
 
 def run_monitor(entries: list[Entry]) -> None:
     MonitorApp(entries).run()
+
+
+def run_history(entries: list[Entry]) -> None:
+    """Same depth as the monitor, but frozen receipts for CLOSED positions."""
+    MonitorApp(entries, receipt=True).run()
