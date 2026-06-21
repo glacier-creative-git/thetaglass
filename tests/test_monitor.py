@@ -79,12 +79,22 @@ def test_underlying_chart_shows_edges():
 def test_health_chart_is_snapshot_scoreboard():
     pos, _ = make_mock_position()
     s = render_health_chart(pos, width=66, height=14)
-    assert "HEALTH" in s and f"{pos['health_score']:.2f}" in s   # compact number, not a banner
+    assert f"{pos['health_score']:.2f}" in s                       # the compact number
+    assert any(v in s for v in ("HEALTHY", "WATCH", "CRITICAL"))   # a verdict word
     # the three axes, each labeled with its blend weight (the weighting made explicit)
     assert "θ-track" in s and "strike" in s and "iv" in s
     assert "40%" in s and "20%" in s
-    assert "weakest" in s                       # the dragging axis is flagged
-    assert "weakest-link" in s                  # the floor rule footnote
+    assert "◄" in s                              # the weakest axis is flagged
+    assert "caps the score" in s                 # the floor-rule footnote
+    assert any(0x2800 <= ord(c) <= 0x28FF for c in s)   # the braille θ/hourglass mark
+
+
+def test_health_chart_falls_back_without_logo_when_cramped():
+    # a short cell drops the logo and centers the scoreboard instead of cropping the mark
+    pos, _ = make_mock_position()
+    s = render_health_chart(pos, width=66, height=8)
+    assert "θ-track" in s and f"{pos['health_score']:.2f}" in s
+    assert not any(0x2800 <= ord(c) <= 0x28FF for c in s)   # no braille mark in cramped mode
 
 
 def test_health_chart_flags_a_floored_axis():

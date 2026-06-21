@@ -1,52 +1,56 @@
-"""The Thetaglass mark — a Greek θ with a curvy-X hourglass inscribed inside it.
+"""The Thetaglass mark — a Greek θ with a curvy-X hourglass (and sand) inscribed inside it.
 
 Rendered in braille (U+2800–U+28FF), the same technique the Hermes agent CLI uses for its
 caduceus: a high-resolution dot bitmap (2×4 dots per character cell) packed into braille
 codepoints, then tinted with a metallic bronze→gold→bronze vertical gradient.
 
 The θ carries its weight on the SIDES (thin top/bottom), matching the real glyph. The
-hourglass is two concave walls that hug the oval near the top/bottom and sweep into a
-pinched neck — a "curvy X" — with its prongs attached to the oval ring so it always fits.
+hourglass is two concave walls that sweep from the oval into a pinched neck — a "curvy X" —
+with dense sand floating inside each chamber. `fill_top`/`fill_bottom` set the sand level
+per chamber (the lever the future animation drives to move sand back and forth).
 
-  render_mark(variant) → the colored mark as a multi-line ANSI string ("V20" | "V22")
+  render_mark(variant) → colored mark as a multi-line ANSI string ("V22" | "V20" | "compact")
   mark_lines(variant)  → the raw braille rows (no color)
-  python -m thetaglass.view.logo [V20|V22] [--plain]   # cat it in the terminal
+  python -m thetaglass.view.logo [V20|V22|compact] [--plain]   # cat it in the terminal
 
-The geometry is generated (not hand-drawn), so every dimension below is a tunable knob.
+The geometry is generated, so every dimension is a tunable knob; the three presets below
+differ only in scale + a few gaps. "compact" is sized to sit inside the monitor's cell.
 """
 from __future__ import annotations
 
 import math
 import sys
 
-# canvas + shape constants (px space is 2×4 the braille-cell grid)
-_W, _H = 54, 68
-_AY = 29                       # oval vertical radius
-_THETA_BASE = 0.7              # min ring thickness (the thin top/bottom caps)
-_THETA_AMP = 1.4              # extra thickness added on the sides (the θ's stress)
-_HG_FY = 0.74                  # how high up the oval the hourglass prongs attach (0..1)
-_HG_NECK = 2.5                 # half-width of the pinched neck, px
-_HG_MARGIN = 1.0               # gap between the hourglass prongs and the oval ring, px
-_VARIANTS = {"V20": 20, "V22": 22}   # oval horizontal radius per width variant
+# Per-preset geometry (px space is 2×4 the braille-cell grid). idx/idy inset the oval to
+# give the inner radii the hourglass + sand attach to.
+_GEOM = {
+    "V22":     dict(W=54, H=68, ax=22, ay=29, base=0.70, amp=1.40, neck=2.5, margin=1.0,
+                    side_m=3.0, neck_gap=3.0, idx=2.5, idy=1.5, fy=0.74),
+    "V20":     dict(W=54, H=68, ax=20, ay=29, base=0.70, amp=1.40, neck=2.5, margin=1.0,
+                    side_m=2.5, neck_gap=2.5, idx=2.5, idy=1.5, fy=0.74),
+    "compact": dict(W=44, H=52, ax=18, ay=24, base=0.65, amp=1.25, neck=1.9, margin=0.9,
+                    side_m=2.4, neck_gap=2.6, idx=2.0, idy=1.2, fy=0.74),
+}
 
 # metallic gradient stops (vertical fraction → rgb), per the Hermes palette
 _STOPS = [(0.0, (205, 127, 50)), (0.28, (255, 191, 0)), (0.5, (255, 215, 0)),
           (0.72, (255, 191, 0)), (0.88, (205, 127, 50)), (1.0, (184, 134, 11))]
 
 _DOT = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]]   # [dy][dx] → bit
+_BLANK = "⠀"
 
 
 def _blank(w: int, h: int) -> list[list[int]]:
     return [[0] * w for _ in range(h)]
 
 
-def _px(g: list[list[int]], x: float, y: float) -> None:
+def _px(g, x, y) -> None:
     xi, yi = int(round(x)), int(round(y))
     if 0 <= yi < len(g) and 0 <= xi < len(g[0]):
         g[yi][xi] = 1
 
 
-def _to_braille(g: list[list[int]]) -> list[str]:
+def _to_braille(g) -> list[str]:
     h, w = len(g), len(g[0])
     out = []
     for cy in range(0, h, 4):
@@ -58,48 +62,85 @@ def _to_braille(g: list[list[int]]) -> list[str]:
                     if cy + dy < h and cx + dx < w and g[cy + dy][cx + dx]:
                         v |= _DOT[dy][dx]
             line += chr(0x2800 + v)
-        out.append(line.rstrip("⠀") or "⠀")
+        out.append(line.rstrip(_BLANK) or _BLANK)
     return out
 
 
-def _theta_ring(g, cx, cy, ax, ay, base=_THETA_BASE, amp=_THETA_AMP) -> None:
-    """An oval ring whose stroke is thick on the sides, thin at top/bottom (real θ stress)."""
+def _theta_ring(g, cx, cy, ax, ay, base, amp) -> None:
+    """Oval ring, stroke thick on the sides and thin at top/bottom (real θ stress)."""
     for y in range(len(g)):
         for x in range(len(g[0])):
-            nx = (x - cx) / ax
-            ny = (y - cy) / ay
+            nx, ny = (x - cx) / ax, (y - cy) / ay
             e = nx * nx + ny * ny
             gm = 2 * math.hypot(nx / ax, ny / ay) or 1e-9
-            dist = abs(e - 1) / gm
-            cos = abs(nx) / math.sqrt(e + 1e-9)        # ~|cos|: 1 at sides, 0 at top/bottom
-            if dist < base + amp * cos * cos and e < 1.3:
+            cos = abs(nx) / math.sqrt(e + 1e-9)        # ~|cos|: 1 at sides, 0 top/bottom
+            if abs(e - 1) / gm < base + amp * cos * cos and e < 1.3:
                 g[y][x] = 1
 
 
-def _hourglass(g, cx, cy, ax_in, ay_in, fy=_HG_FY, neck=_HG_NECK, margin=_HG_MARGIN) -> None:
-    """Two concave walls (sine profile) from the oval ring down into a pinched neck — the
-    curvy-X hourglass. Prongs attach at height `fy` of the inner oval, so it always fits."""
-    top_y = cy - fy * ay_in
-    bot_y = cy + fy * ay_in
+def _hw(y, cy, half, neck, w_end):
+    v = (y - cy) / half
+    return neck + (w_end - neck) * math.sin(min(1.0, abs(v)) * math.pi / 2)
+
+
+def _hourglass(g, cx, cy, ax_in, ay_in, fy, neck, margin) -> None:
+    """Two concave sine-profile walls from the oval ring into a pinched neck — the curvy X."""
+    top_y, bot_y = cy - fy * ay_in, cy + fy * ay_in
     w_end = ax_in * math.sqrt(1 - fy * fy) - margin
     half = fy * ay_in
     steps = int((bot_y - top_y) * 6)
     for i in range(steps + 1):
         y = top_y + (bot_y - top_y) * i / steps
-        v = (y - cy) / half
-        hw = neck + (w_end - neck) * math.sin(min(1.0, abs(v)) * math.pi / 2)
+        hw = _hw(y, cy, half, neck, w_end)
         _px(g, cx - hw, y)
         _px(g, cx + hw, y)
 
 
-def mark_lines(variant: str = "V22") -> list[str]:
-    """The mark as raw braille rows (no color)."""
-    ax = _VARIANTS.get(variant, _VARIANTS["V22"])
-    g = _blank(_W, _H)
-    cx, cy = (_W - 1) / 2, (_H - 1) / 2
-    _theta_ring(g, cx, cy, ax, _AY)
-    _hourglass(g, cx, cy, ax - 2.5, _AY - 1.5)
+def _sand(g, cx, cy, ax_in, ay_in, fill_top, fill_bottom, side_m, neck_gap, fy, neck, margin):
+    """Dense sand floating inside each chamber. fill_top/fill_bottom (0..1) set how full each
+    chamber is; the top surface drops as it drains, the bottom pile rises as it fills. The
+    lateral gap to the glass walls (side_m) is fixed and never changes with the fill."""
+    top_y, bot_y = cy - fy * ay_in, cy + fy * ay_in
+    w_end = ax_in * math.sqrt(1 - fy * fy) - margin
+    half = fy * ay_in
+
+    def fill(y0, y1):
+        yy = int(round(y0))
+        while yy <= int(round(y1)):
+            inner = _hw(yy, cy, half, neck, w_end) - side_m
+            if inner > 0:
+                for xx in range(int(round(cx - inner)), int(round(cx + inner)) + 1):
+                    if 0 <= yy < len(g) and 0 <= xx < len(g[0]):
+                        g[yy][xx] = 1
+            yy += 1
+
+    top_lo = cy - neck_gap
+    fill(top_y + (1 - fill_top) * (top_lo - top_y), top_lo)      # top: surface drops
+    bot_hi = cy + neck_gap
+    fill(bot_y - fill_bottom * (bot_y - bot_hi), bot_y)          # bottom: pile rises
+
+
+def _build(geo, fill_top, fill_bottom) -> list[str]:
+    g = _blank(geo["W"], geo["H"])
+    cx, cy = (geo["W"] - 1) / 2, (geo["H"] - 1) / 2
+    _theta_ring(g, cx, cy, geo["ax"], geo["ay"], geo["base"], geo["amp"])
+    ax_in, ay_in = geo["ax"] - geo["idx"], geo["ay"] - geo["idy"]
+    _hourglass(g, cx, cy, ax_in, ay_in, geo["fy"], geo["neck"], geo["margin"])
+    _sand(g, cx, cy, ax_in, ay_in, fill_top, fill_bottom,
+          geo["side_m"], geo["neck_gap"], geo["fy"], geo["neck"], geo["margin"])
     return _to_braille(g)
+
+
+def mark_lines(variant: str = "V22", fill_top: float = 1.0, fill_bottom: float = 1.0,
+               trim: bool = False) -> list[str]:
+    """The mark as raw braille rows (no color). `trim` drops blank top/bottom rows."""
+    rows = _build(_GEOM.get(variant, _GEOM["V22"]), fill_top, fill_bottom)
+    if trim:
+        while rows and rows[0].strip(_BLANK) == "":
+            rows.pop(0)
+        while rows and rows[-1].strip(_BLANK) == "":
+            rows.pop()
+    return rows
 
 
 def _metal(f: float) -> tuple[int, int, int]:
@@ -122,14 +163,24 @@ def colorize(rows: list[str]) -> str:
     return "\n".join(out)
 
 
-def render_mark(variant: str = "V22", color: bool = True) -> str:
-    rows = mark_lines(variant)
+def colored_lines(variant: str = "compact", fill_top: float = 1.0, fill_bottom: float = 1.0,
+                  trim: bool = True) -> list[str]:
+    """Colored mark rows, each padded to a uniform width (for placing beside other content)."""
+    rows = mark_lines(variant, fill_top, fill_bottom, trim=trim)
+    w = max((len(r) for r in rows), default=0)
+    rows = [r + _BLANK * (w - len(r)) for r in rows]
+    return colorize(rows).split("\n")
+
+
+def render_mark(variant: str = "V22", color: bool = True,
+                fill_top: float = 1.0, fill_bottom: float = 1.0) -> str:
+    rows = mark_lines(variant, fill_top, fill_bottom)
     return colorize(rows) if color else "\n".join(rows)
 
 
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
-    variant = next((a for a in argv if a in _VARIANTS), "V22")
+    variant = next((a for a in argv if a in _GEOM), "V22")
     plain = "--plain" in argv
     print(render_mark(variant, color=not plain))
 

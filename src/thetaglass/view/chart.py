@@ -23,6 +23,7 @@ import plotille
 from thetaglass.settings import CONFIG
 from thetaglass.state.baseline import expected_pl_pct
 from thetaglass.state.blackscholes import underlying_for_profit
+from thetaglass.view import logo as _logo
 
 # rgb line colors (plotille color_mode="rgb")
 C_UNDER = (80, 150, 245)     # underlying daily-close price — blue
@@ -331,16 +332,28 @@ def _center(line: str, inner: int) -> str:
     return " " * max(0, (inner - _vlen(line)) // 2) + line
 
 
+def _bar_rows(vals: dict, weakest, floored: bool, bar_w: int) -> list[str]:
+    rows = []
+    for key, lab, w in _AXES:
+        v = vals.get(key)
+        head_cell = _c(f"{lab:<7} {int(w * 100):>2}%", C_MUT)   # fixed-width label + weight
+        if v is None:
+            rows.append(f"{head_cell}   " + _c("—", C_MUT))
+            continue
+        filled = int(round(max(0.0, min(1.0, v)) * bar_w))
+        bar = _c("█" * filled, _axis_color(v)) + _c("░" * (bar_w - filled), C_DIM)
+        flag = _c("  ◄", C_BAD if floored else C_MUT) if key == weakest else ""
+        rows.append(f"{head_cell}   {bar}  {v:.2f}{flag}")
+    return rows
+
+
 def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
-    """The weighted health score as a SNAPSHOT scoreboard (the other three cells already
-    carry each axis's history). A compact color-coded number + verdict, then the three 0–1
-    axes as centered bars with their blend weights — and a flag on whichever axis is
-    weakest, because the weakest-link floor means a single critical axis drags the whole
-    score down to itself, which a plain weighted average would otherwise hide."""
-    inner = max(40, width)
+    """The weighted health score as a SNAPSHOT scoreboard, with the Thetaglass mark beside
+    it. The other three cells already carry each axis's history, so this cell is the brand +
+    the blended number + the three 0–1 axes as bars (weakest-link floor flagged). The θ /
+    hourglass logo sits on the left; score and bars stack on the right."""
     health = pos.get("health_score")
     axes = pos.get("health_axes") or {}
-
     if health is None or not axes:
         return _c("  health score unavailable\n  (needs price + IV to compute its axes)", C_MUT)
 
@@ -348,35 +361,43 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
     weakest = min(vals, key=vals.get) if vals else None
     floored = bool(vals) and vals[weakest] < CONFIG.CRIT
     sc = _score_color(health)
-
     verdict = ("CRITICAL" if (health < 0.4 or floored) else
                "WATCH" if health < 0.7 else "HEALTHY")
-    head = (_c("HEALTH", C_MUT) + "   " + _c(f"{health:.2f}", sc)
-            + "   " + _c(verdict, sc))
+    floor_note = ""
     if floored:
-        wl = dict((k, lab) for k, lab, _ in _AXES)[weakest]
-        head += _c(f"  ⚠ floored by {wl}", C_BAD)
+        floor_note = _c(f"⚠ floored by {dict((k, l) for k, l, _ in _AXES)[weakest]}", C_BAD)
 
-    # Build the bar rows first, then center the whole block as a unit so it no longer skews
-    # with the header's length. Bars keep their left edges aligned to each other.
-    bar_w = max(12, min(30, inner - 26))
-    bar_rows = []
-    for key, lab, w in _AXES:
-        v = vals.get(key)
-        head_cell = _c(f"{lab:<7} {int(w * 100):>2}%", C_MUT)   # fixed-width label + weight
-        if v is None:
-            bar_rows.append(f"{head_cell}   " + _c("—", C_MUT))
-            continue
-        filled = int(round(max(0.0, min(1.0, v)) * bar_w))
-        bar = _c("█" * filled, _axis_color(v)) + _c("░" * (bar_w - filled), C_DIM)
-        flag = _c("  ◄", C_BAD if floored else C_MUT) if key == weakest else ""
-        bar_rows.append(f"{head_cell}   {bar}  {v:.2f}{flag}")
+    # Show the mark only when the cell is roomy enough; otherwise center the scoreboard.
+    logo = _logo.colored_lines("compact") if (width >= 52 and height >= 13) else None
+    logo_w = _vlen(logo[0]) if logo else 0
+    inner = max(28, width - logo_w - 3)
+    bar_w = max(10, min(26, inner - 24))
+    bars = _bar_rows(vals, weakest, floored, bar_w)
+    footnote = _c(f"floor: 1 axis < {CONFIG.CRIT:g} caps the score", C_MUT)
 
-    block_w = max(_vlen(r) for r in bar_rows)
-    margin = " " * max(0, (inner - block_w) // 2)
+    if not logo:
+        block_w = max(_vlen(r) for r in bars)
+        m = " " * max(0, (width - block_w) // 2)
+        head = _c("HEALTH", C_MUT) + "   " + _c(f"{health:.2f}", sc) + "   " + _c(verdict, sc)
+        lines = ["", _center(head, width), ""]
+        if floored:
+            lines.append(_center(floor_note, width))
+        lines += [m + r for r in bars] + ["", _center(footnote, width)]
+        return "\n".join(lines)
 
-    lines = ["", _center(head, inner), ""]
-    lines += [margin + r for r in bar_rows]
-    lines += ["", _center(_c(f"floor: any axis < {CONFIG.CRIT:g} caps the score "
-                             f"(weakest-link)", C_MUT), inner)]
-    return "\n".join(lines)
+    # right column: the score on top, the axis bars below
+    right = [_c("T H E T A G L A S S", C_MUT), "",
+             _c(f"{health:.2f}", sc) + "   " + _c(verdict, sc)]
+    if floored:
+        right.append(floor_note)
+    right += [""] + bars + ["", footnote]
+
+    offset = max(0, (len(logo) - len(right)) // 2)
+    total = max(len(logo), offset + len(right))
+    out = []
+    for i in range(total):
+        left = logo[i] if i < len(logo) else " " * logo_w
+        j = i - offset
+        rline = right[j] if 0 <= j < len(right) else ""
+        out.append(f"{left}   {rline}")
+    return "\n".join(out)
