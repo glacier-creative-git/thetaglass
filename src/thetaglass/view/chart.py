@@ -359,12 +359,33 @@ def _bar_rows(vals: dict, weakest, floored: bool, bar_w: int) -> list[str]:
     return rows
 
 
-def render_health_chart(pos: dict, width: int = 90, height: int = 16,
-                        fill_top: float = 1.0, fill_bottom: float = 1.0) -> str:
+def _life_elapsed(pos: dict) -> float | None:
+    """Fraction of the position's life that has elapsed since it opened (0 at open, 1 at
+    expiration) — i.e. how far it's run through its theta decay. None if DTE is unknown."""
+    opened = pos.get("dte_at_open")
+    left = pos.get("dte_remaining")
+    if not opened or left is None:
+        return None
+    return max(0.0, min(1.0, (opened - left) / opened))
+
+
+def _dte_row(pos: dict, elapsed: float, bar_w: int) -> str:
+    """A progress bar for the position's life — same shape as the axis bars but neutral (grey,
+    not health-colored): it tracks time, not good/bad. Mirrors the hourglass sand level."""
+    opened, left = pos.get("dte_at_open"), pos.get("dte_remaining")
+    head = _c(f"{'DTE':<11}", C_MUT)            # blank weight slot keeps the bars aligned
+    filled = int(round(max(0.0, min(1.0, elapsed)) * bar_w))
+    bar = _c("█" * filled, C_MUT) + _c("░" * (bar_w - filled), C_DIM)
+    return f"{head}   {bar}  " + _c(f"{left:>2}/{opened}d {int(round(elapsed * 100)):>2}%", C_MUT)
+
+
+def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
     """The weighted health score as a SNAPSHOT scoreboard, with the Thetaglass mark beside
     it. The other three cells already carry each axis's history, so this cell is the brand +
     the blended number + the three 0–1 axes as bars (weakest-link floor flagged). The θ /
-    hourglass logo sits on the left; score and bars stack on the right."""
+    hourglass logo sits on the left; score and bars stack on the right. The hourglass sand is
+    a real readout: it shows how far the position has run through its life (top full at open,
+    drained to the bottom by expiration), snapped to quarters."""
     health = pos.get("health_score")
     axes = pos.get("health_axes") or {}
     if health is None or not axes:
@@ -380,13 +401,22 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16,
     if floored:
         floor_note = _c(f"⚠ floored by {dict((k, l) for k, l, _ in _AXES)[weakest]}", C_BAD)
 
+    # Sand level = how far the position has run through its life, snapped to quarters. The
+    # hourglass empties from the top as expiration nears: fill_bottom rises, fill_top falls.
+    elapsed = _life_elapsed(pos)
+    snapped = round(elapsed * 4) / 4 if elapsed is not None else None
+
     # Show the mark only when the cell is roomy enough; otherwise center the scoreboard.
-    logo = (list(_logo.compact_frame(fill_top, fill_bottom))
-            if (width >= 52 and height >= 13) else None)
+    if width >= 52 and height >= 13 and snapped is not None:
+        logo = list(_logo.compact_frame(1.0 - snapped, snapped))
+    else:
+        logo = None
     logo_w = _vlen(logo[0]) if logo else 0
     inner = max(28, width - logo_w - 3)
     bar_w = max(10, min(26, inner - 24))
     bars = _bar_rows(vals, weakest, floored, bar_w)
+    if elapsed is not None:
+        bars.append(_dte_row(pos, elapsed, bar_w))
     footnote = _c(f"floor: 1 axis < {CONFIG.CRIT:g} caps the score", C_MUT)
 
     if not logo:

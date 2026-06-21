@@ -168,36 +168,21 @@ def test_nav_scrolls_through_full_book():
     asyncio.run(scenario())
 
 
-def test_sand_animates_without_resetting_on_scroll():
-    entries = make_mock_book(2)
-
-    async def scenario():
-        app = MonitorApp(entries)
-        async with app.run_test(size=(150, 44)) as pilot:   # roomy enough to show the mark
-            await pilot.pause()
-            assert app._anim_frame == 0
-            frame0 = app._render_health()
-
-            app._tick_sand()                              # one animation tick
-            await pilot.pause()
-            assert app._anim_frame == 1
-            frame1 = app._render_health()
-            assert frame0 != frame1                       # the sand actually moved
-
-            # scrolling to another position must NOT reset the running animation
-            await pilot.press("down")
-            await pilot.pause()
-            assert app.current_idx == 1
-            assert app._anim_frame == 1                   # frame counter untouched by selection
-
-    asyncio.run(scenario())
-
-
-def test_health_chart_sand_level_changes_render():
+def test_health_chart_has_dte_progress_bar():
     pos, _ = make_mock_position()
-    full_bottom = render_health_chart(pos, width=66, height=14, fill_top=0.0, fill_bottom=1.0)
-    full_top = render_health_chart(pos, width=66, height=14, fill_top=1.0, fill_bottom=0.0)
-    assert full_bottom != full_top                        # the sand level is reflected in the mark
+    s = render_health_chart(pos, width=66, height=14)
+    assert "DTE" in s                                              # the life-progress bar
+    assert f"{pos['dte_remaining']}/{pos['dte_at_open']}d" in s    # days left / total
+    elapsed = (pos["dte_at_open"] - pos["dte_remaining"]) / pos["dte_at_open"]
+    assert f"{round(elapsed * 100)}%" in s                         # percent through its life
+
+
+def test_health_chart_sand_tracks_position_life():
+    # a fresh position (top-full) and a near-expiry one (bottom-full) render different marks
+    pos, _ = make_mock_position()
+    fresh = render_health_chart({**pos, "dte_remaining": pos["dte_at_open"]}, width=66, height=14)
+    old = render_health_chart({**pos, "dte_remaining": 0}, width=66, height=14)
+    assert fresh != old                                   # the sand level reflects time elapsed
 
 
 def test_arrow_nav_switches_chart():

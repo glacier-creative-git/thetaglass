@@ -173,18 +173,12 @@ def colored_lines(variant: str = "compact", fill_top: float = 1.0, fill_bottom: 
     return colorize(rows).split("\n")
 
 
-# The sand-animation cycle: (fill_top, fill_bottom) keyframes. Starts bottom-full (sand at
-# rest in the lower chamber), drains up through the neck until the top is full, then reverses
-# — a slow back-and-forth forever. Five discrete levels matches the ~4 visible sand layers.
-SAND_CYCLE = ((0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0),
-              (0.75, 0.25), (0.5, 0.5), (0.25, 0.75))
-
-
 @lru_cache(maxsize=None)
 def compact_frame(fill_top: float = 1.0, fill_bottom: float = 1.0) -> tuple[str, ...]:
-    """One cached animation frame: the colored `compact` mark at a given sand level. The set
-    of distinct (fill_top, fill_bottom) pairs is tiny (see SAND_CYCLE), so every frame is
-    rendered once and reused — the animation is just a dict lookup per tick."""
+    """The colored `compact` mark at a given sand level, cached. The sand reads as an
+    hourglass: it's how far the position has run through its life — top full at open, draining
+    to the bottom by expiration. Levels snap to quarters, so the set of (fill_top, fill_bottom)
+    pairs is tiny and every frame is rendered exactly once."""
     return tuple(colored_lines("compact", fill_top, fill_bottom, trim=True))
 
 
