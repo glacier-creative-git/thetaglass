@@ -1,5 +1,5 @@
 """The Thetaglass braille mark (θ + inscribed hourglass)."""
-from thetaglass.view.logo import colorize, mark_lines, render_mark
+from thetaglass.view.logo import colorize, compact_frame, mark_lines, render_mark
 
 BRAILLE = range(0x2800, 0x28FF + 1)
 
@@ -21,6 +21,13 @@ def test_v22_is_wider_than_v20():
     w20 = max(len(r) for r in mark_lines("V20"))
     w22 = max(len(r) for r in mark_lines("V22"))
     assert w22 > w20                              # the wider oval is actually wider
+
+
+def test_sand_has_ten_distinct_levels():
+    # the DTE readout snaps to tenths; the braille resolution must render each as a distinct
+    # frame (top drains / bottom fills by ≥1 dot per step) — otherwise tenths are a lie
+    frames = {tuple(compact_frame(round(1 - i / 10, 3), round(i / 10, 3))) for i in range(11)}
+    assert len(frames) == 11
 
 
 def test_colorize_applies_metallic_gradient():

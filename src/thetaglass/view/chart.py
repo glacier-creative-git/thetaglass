@@ -295,6 +295,11 @@ C_BAD = (220, 100, 100)      # < 0.4, or any axis below CRIT — red
 C_DIM = (70, 70, 82)         # empty bar track — dim grey
 C_MUT = (150, 150, 165)      # muted labels/footnote — grey
 
+# How many discrete sand levels the hourglass shows across a position's life. 10 (one per
+# 10%) is the most the compact mark's braille resolution renders as distinct steps — each
+# tenth flips at least one dot as the top drains and the bottom fills.
+_SAND_STEPS = 10
+
 # Which raw axis each health component normalizes, and its weight in the blend — shown on
 # the bar so the weighting (the thing that's easy to misread) is explicit.
 _AXES = [
@@ -385,7 +390,7 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
     the blended number + the three 0–1 axes as bars (weakest-link floor flagged). The θ /
     hourglass logo sits on the left; score and bars stack on the right. The hourglass sand is
     a real readout: it shows how far the position has run through its life (top full at open,
-    drained to the bottom by expiration), snapped to quarters."""
+    drained to the bottom by expiration), in 10% steps."""
     health = pos.get("health_score")
     axes = pos.get("health_axes") or {}
     if health is None or not axes:
@@ -401,10 +406,10 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
     if floored:
         floor_note = _c(f"⚠ floored by {dict((k, l) for k, l, _ in _AXES)[weakest]}", C_BAD)
 
-    # Sand level = how far the position has run through its life, snapped to quarters. The
+    # Sand level = how far the position has run through its life, snapped to _SAND_STEPS. The
     # hourglass empties from the top as expiration nears: fill_bottom rises, fill_top falls.
     elapsed = _life_elapsed(pos)
-    snapped = round(elapsed * 4) / 4 if elapsed is not None else None
+    snapped = round(elapsed * _SAND_STEPS) / _SAND_STEPS if elapsed is not None else None
 
     # Show the mark only when the cell is roomy enough; otherwise center the scoreboard.
     if width >= 52 and height >= 13 and snapped is not None:

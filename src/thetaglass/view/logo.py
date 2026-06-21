@@ -177,8 +177,8 @@ def colored_lines(variant: str = "compact", fill_top: float = 1.0, fill_bottom: 
 def compact_frame(fill_top: float = 1.0, fill_bottom: float = 1.0) -> tuple[str, ...]:
     """The colored `compact` mark at a given sand level, cached. The sand reads as an
     hourglass: it's how far the position has run through its life — top full at open, draining
-    to the bottom by expiration. Levels snap to quarters, so the set of (fill_top, fill_bottom)
-    pairs is tiny and every frame is rendered exactly once."""
+    to the bottom by expiration. Levels snap to 10% steps, so the set of (fill_top, fill_bottom)
+    pairs is small and every frame is rendered exactly once."""
     return tuple(colored_lines("compact", fill_top, fill_bottom, trim=True))
 
 
