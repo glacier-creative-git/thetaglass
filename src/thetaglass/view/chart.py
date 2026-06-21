@@ -332,6 +332,18 @@ def _center(line: str, inner: int) -> str:
     return " " * max(0, (inner - _vlen(line)) // 2) + line
 
 
+def _frame(lines: list[str], width: int, height: int, hcenter: bool) -> str:
+    """Center a block of (possibly ANSI) lines within the cell — vertically always, and
+    horizontally when hcenter. Unlike the plotille charts (locked top-left), the health
+    cell is plain text, so we can pad it to sit in the middle as the terminal resizes."""
+    if hcenter:
+        bw = max((_vlen(l) for l in lines), default=0)
+        lp = " " * max(0, (width - bw) // 2)
+        lines = [lp + l for l in lines]
+    top = max(0, (height - len(lines)) // 2)
+    return "\n".join([""] * top + lines)
+
+
 def _bar_rows(vals: dict, weakest, floored: bool, bar_w: int) -> list[str]:
     rows = []
     for key, lab, w in _AXES:
@@ -379,11 +391,11 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
         block_w = max(_vlen(r) for r in bars)
         m = " " * max(0, (width - block_w) // 2)
         head = _c("HEALTH", C_MUT) + "   " + _c(f"{health:.2f}", sc) + "   " + _c(verdict, sc)
-        lines = ["", _center(head, width), ""]
+        lines = [_center(head, width), ""]
         if floored:
             lines.append(_center(floor_note, width))
         lines += [m + r for r in bars] + ["", _center(footnote, width)]
-        return "\n".join(lines)
+        return _frame(lines, width, height, hcenter=False)
 
     # right column: the score on top, the axis bars below
     right = [_c("T H E T A G L A S S", C_MUT), "",
@@ -400,4 +412,4 @@ def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
         j = i - offset
         rline = right[j] if 0 <= j < len(right) else ""
         out.append(f"{left}   {rline}")
-    return "\n".join(out)
+    return _frame(out, width, height, hcenter=True)
