@@ -5,8 +5,8 @@ is its own self-scaled chart with full vertical room. Both share only the concep
 (days since open). plotille draws rgb braille and returns a string, so each slots into
 its own Textual cell via Text.from_ansi.
 
-  render_pnl_chart        — P/L in dollars (up = made money): realized path + forecast
-                            cone (linear→max-profit, linear→max-loss, √time on-track).
+  render_pnl_chart        — P/L in dollars (up = made money): unrealized (mark-to-market)
+                            path + forecast cone (√time on-track top, √time max-loss bottom).
   render_underlying_chart — underlying price + the outcome edges (short/long strike,
                             break-even) and a forward cone projecting today's price to
                             those edges at expiration.
@@ -15,10 +15,12 @@ Pure: each takes a Position dict + snapshot history, returns an ANSI string.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import plotille
 
+from thetaglass.settings import CONFIG
 from thetaglass.state.baseline import expected_pl_pct
 from thetaglass.state.blackscholes import underlying_for_profit
 
@@ -27,8 +29,8 @@ C_UNDER = (80, 150, 245)     # underlying daily-close price — blue
 C_PROFIT = (95, 200, 120)    # profit edge (short strike) — green
 C_LOSS = (215, 95, 95)       # max-loss edge (long strike) — red
 C_BE_GREY = (155, 155, 170)  # break-even — grey
-C_REAL = (120, 230, 150)     # realized P/L — bright green
-C_BACKFILL = (95, 150, 245)  # estimated pre-watch P/L (linear bridge) — blue
+C_UNREAL = (95, 150, 245)    # unrealized (mark-to-market) P/L, incl. pre-watch bridge — blue
+C_BACKFILL = C_UNREAL        # bridge is the same blue: one continuous P/L line
 C_SQRT = (95, 165, 110)      # √time on-track (cone top) — dark green
 C_WORST = (200, 115, 115)    # linear → max loss (cone bottom) — dim red
 C_IV_GOOD = (95, 205, 130)   # IV below entry — vol falling, good for the seller — green
@@ -97,13 +99,13 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
                      max_=max_profit * 1.15 if max_profit else 10)
     # X stays plotted as days-since-open (0→dte0) but READS as days-to-expiration: the
     # leftmost tick is the DTE at open, the rightmost is 0. Data positions are unchanged.
-    fig.x_label = "days to exp"
+    fig.x_label = "DTE"
     fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
     ys = [h["pl_dollars"] for h in history if h.get("pl_dollars") is not None]
-    realized_now = ys[-1] if ys else (pos.get("pl_dollars") or 0.0)
+    unrealized_now = ys[-1] if ys else (pos.get("pl_dollars") or 0.0)
 
-    # The cone is a FORECAST: it starts at NOW (anchored to the current realized value)
+    # The cone is a FORECAST: it starts at NOW (anchored to the current unrealized value)
     # and fans to expiration — NOT from open. Both edges follow the SAME √time progress
     # (slow now, accelerating toward expiry), fanning UP to max profit and DOWN to max
     # loss. Matching curves make the cone symmetric in shape, so the dollar asymmetry (a
@@ -115,8 +117,8 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
         e_now = expected_pl_pct(dte0 - now_x, dte0)
         denom = (1.0 - e_now) or 1.0
         prog = [(expected_pl_pct(dte0 - x, dte0) - e_now) / denom for x in xs_f]
-        top = [realized_now + (max_profit - realized_now) * p for p in prog]
-        bot = [realized_now + (-max_loss - realized_now) * p for p in prog]
+        top = [unrealized_now + (max_profit - unrealized_now) * p for p in prog]
+        bot = [unrealized_now + (-max_loss - unrealized_now) * p for p in prog]
 
     # Backfill: if we started watching after open, bridge the gap with a straight, clearly
     # BLUE line from break-even at open ($0) to the first real reading. We know the entry
@@ -125,7 +127,7 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     backfilled = bool(ys) and xs_y[0] > 0.5
 
     # Draw order (one color per braille cell): max-loss first (lowest priority), then
-    # backfill, on-track, and realized LAST on top — so where lines share a cell, your
+    # backfill, on-track, and unrealized LAST on top — so where lines share a cell, your
     # actual P/L wins. With the tall side-by-side cells they barely overlap anyway.
     if bot is not None:
         fig.plot(xs_f, bot, lc=C_WORST, label="max-loss")
@@ -134,15 +136,15 @@ def render_pnl_chart(pos: dict, history: list[dict], width: int = 90, height: in
     if top is not None:
         fig.plot(xs_f, top, lc=C_SQRT, label="√time on-track")
     if ys:
-        fig.plot(xs_y, ys, lc=C_REAL, label="realized P/L")
+        fig.plot(xs_y, ys, lc=C_UNREAL, label="unrealized P/L")
 
     dte_now = dte0 - now_x
     title = (f" P/L (up = made money)    max profit ${max_profit:g}   "
              f"max loss ${max_loss:g}   DTE {dte_now:.0f}/{dte0}")
-    key_items = [("realized", C_REAL)]
-    if backfilled:
-        key_items.append(("backfill", C_BACKFILL))
-    key_items += [("on-track √t (top)", C_SQRT), ("max-loss √t (bottom)", C_WORST)]
+    # The position is still OPEN — this P/L is mark-to-market, i.e. UNrealized — and the
+    # pre-watch bridge shares its blue, so the key shows one "unrealized P/L" entry.
+    key_items = [("unrealized P/L", C_UNREAL),
+                 ("on-track √t (top)", C_SQRT), ("max-loss √t (bottom)", C_WORST)]
     return title + "\n " + _key(*key_items) + "\n" + fig.show()
 
 
@@ -200,7 +202,7 @@ def render_underlying_chart(pos: dict, history: list[dict],
 
     fig = _new_fig(width, height, dte0, "$")
     fig.set_y_limits(min_=lo - pad, max_=hi + pad)
-    fig.x_label = "days to exp"
+    fig.x_label = "DTE"
     fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
     for cur, color in curves:
@@ -247,7 +249,7 @@ def render_iv_chart(pos: dict, history: list[dict],
 
     fig = _new_fig(width, height, dte0, "IV %")
     fig.set_y_limits(min_=max(0, lo - pad), max_=hi + pad)
-    fig.x_label = "days to exp"
+    fig.x_label = "DTE"
     fig.x_ticks_fkt = lambda v, _: f"{dte0 - v:.0f}"
 
     # the line you sold at — everything is read relative to this
@@ -281,3 +283,100 @@ def render_iv_chart(pos: dict, history: list[dict],
         key_items.append(("backfill", C_BACKFILL))
     key_items.append(("IV@entry", C_IVENTRY))
     return title + "\n " + _key(*key_items) + "\n" + fig.show()
+
+
+# --------------------------------------------------------------------- health score
+
+# health-cell palette (rgb); reused by the score banner + axis bars
+C_HEALTHY = (95, 205, 130)   # ≥ 0.7 — green
+C_WATCH = (220, 190, 90)     # 0.4–0.7 — amber
+C_BAD = (220, 100, 100)      # < 0.4, or any axis below CRIT — red
+C_DIM = (70, 70, 82)         # empty bar track — dim grey
+C_MUT = (150, 150, 165)      # muted labels/footnote — grey
+
+# Which raw axis each health component normalizes, and its weight in the blend — shown on
+# the bar so the weighting (the thing that's easy to misread) is explicit.
+_AXES = [
+    ("theta_on_track", "θ-track", CONFIG.W_THETA),
+    ("strike_distance", "strike", CONFIG.W_STRIKE),
+    ("iv_stability", "iv", CONFIG.W_IV),
+]
+
+
+def _c(s: str, rgb: tuple[int, int, int]) -> str:
+    r, g, b = rgb
+    return f"\x1b[38;2;{r};{g};{b}m{s}\x1b[0m"
+
+
+def _score_color(h: float | None) -> tuple[int, int, int]:
+    if h is None:
+        return C_MUT
+    return C_HEALTHY if h >= 0.7 else C_WATCH if h >= 0.4 else C_BAD
+
+
+def _axis_color(v: float) -> tuple[int, int, int]:
+    # red the instant an axis is critical (it's what trips the weakest-link floor)
+    return C_BAD if v < CONFIG.CRIT else C_WATCH if v < 0.7 else C_HEALTHY
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _vlen(s: str) -> int:
+    """Visible length of an ANSI string (escape codes don't take screen columns)."""
+    return len(_ANSI_RE.sub("", s))
+
+
+def _center(line: str, inner: int) -> str:
+    return " " * max(0, (inner - _vlen(line)) // 2) + line
+
+
+def render_health_chart(pos: dict, width: int = 90, height: int = 16) -> str:
+    """The weighted health score as a SNAPSHOT scoreboard (the other three cells already
+    carry each axis's history). A compact color-coded number + verdict, then the three 0–1
+    axes as centered bars with their blend weights — and a flag on whichever axis is
+    weakest, because the weakest-link floor means a single critical axis drags the whole
+    score down to itself, which a plain weighted average would otherwise hide."""
+    inner = max(40, width)
+    health = pos.get("health_score")
+    axes = pos.get("health_axes") or {}
+
+    if health is None or not axes:
+        return _c("  health score unavailable\n  (needs price + IV to compute its axes)", C_MUT)
+
+    vals = {k: axes.get(k) for k, _lab, _w in _AXES if axes.get(k) is not None}
+    weakest = min(vals, key=vals.get) if vals else None
+    floored = bool(vals) and vals[weakest] < CONFIG.CRIT
+    sc = _score_color(health)
+
+    verdict = ("CRITICAL" if (health < 0.4 or floored) else
+               "WATCH" if health < 0.7 else "HEALTHY")
+    head = (_c("HEALTH", C_MUT) + "   " + _c(f"{health:.2f}", sc)
+            + "   " + _c(verdict, sc))
+    if floored:
+        wl = dict((k, lab) for k, lab, _ in _AXES)[weakest]
+        head += _c(f"  ⚠ floored by {wl}", C_BAD)
+
+    # Build the bar rows first, then center the whole block as a unit so it no longer skews
+    # with the header's length. Bars keep their left edges aligned to each other.
+    bar_w = max(12, min(30, inner - 26))
+    bar_rows = []
+    for key, lab, w in _AXES:
+        v = vals.get(key)
+        head_cell = _c(f"{lab:<7} {int(w * 100):>2}%", C_MUT)   # fixed-width label + weight
+        if v is None:
+            bar_rows.append(f"{head_cell}   " + _c("—", C_MUT))
+            continue
+        filled = int(round(max(0.0, min(1.0, v)) * bar_w))
+        bar = _c("█" * filled, _axis_color(v)) + _c("░" * (bar_w - filled), C_DIM)
+        flag = _c("  ◄", C_BAD if floored else C_MUT) if key == weakest else ""
+        bar_rows.append(f"{head_cell}   {bar}  {v:.2f}{flag}")
+
+    block_w = max(_vlen(r) for r in bar_rows)
+    margin = " " * max(0, (inner - block_w) // 2)
+
+    lines = ["", _center(head, inner), ""]
+    lines += [margin + r for r in bar_rows]
+    lines += ["", _center(_c(f"floor: any axis < {CONFIG.CRIT:g} caps the score "
+                             f"(weakest-link)", C_MUT), inner)]
+    return "\n".join(lines)

@@ -4,7 +4,7 @@ A Textual dashboard: a 2×2 grid of charts over a scrollable list of dense posit
 ↑/↓ moves the highlight and the charts re-render for the newly selected position.
 
   ┌ Position P/L ┬ Underlying ┐
-  ├ IV vs RV     ┼ [EMPTY]    ┤   ← reserved cell for a future view
+  ├ IV vs entry  ┼ Health     ┤   ← health = the 3 axes (P/L, price, IV) scored + blended
   └ positions (arrow-navigable list) ┘
 
 Textual earns its keep here precisely because Rich can't capture arrow keys. Each chart
@@ -18,8 +18,8 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, ListItem, ListView, Static
 
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import (render_iv_chart, render_pnl_chart,
-                                    render_underlying_chart)
+from thetaglass.view.chart import (render_health_chart, render_iv_chart,
+                                    render_pnl_chart, render_underlying_chart)
 
 # entry = (position_dict, history_rows, underlying_closes)
 Entry = tuple[dict, list[dict], list]
@@ -45,10 +45,9 @@ class MonitorApp(App):
     CSS = """
     #charts   { height: 3fr; }
     .chartrow { height: 1fr; }
-    #pnl, #under, #ivrv, #empty {
+    #pnl, #under, #ivrv, #health {
         width: 1fr; height: 100%; border: round $accent; padding: 0 1;
     }
-    #empty { color: $text-muted; content-align: center middle; }
     #plist { height: 1fr; min-height: 8; border: round $accent; scrollbar-size: 1 1; }
     PositionItem { padding: 0 1; height: auto; }
     ListView > PositionItem.--highlight { background: $boost; }
@@ -69,7 +68,7 @@ class MonitorApp(App):
                 yield Static(id="under")
             with Horizontal(classes="chartrow"):
                 yield Static(id="ivrv")
-                yield Static("[EMPTY]", id="empty")
+                yield Static(id="health")
         yield ListView(*[PositionItem(e) for e in self.entries], id="plist")
         yield Footer()
 
@@ -78,7 +77,7 @@ class MonitorApp(App):
         self.query_one("#pnl", Static).border_title = "Position P/L"
         self.query_one("#under", Static).border_title = "Underlying"
         self.query_one("#ivrv", Static).border_title = "Implied Vol vs entry"
-        self.query_one("#empty", Static).border_title = "—"
+        self.query_one("#health", Static).border_title = "Health score"
         self.query_one("#plist", ListView).border_title = (
             f"Positions ({len(self.entries)})  ↑/↓ select · q quit")
         plist = self.query_one("#plist", ListView)
@@ -103,7 +102,8 @@ class MonitorApp(App):
         pnl = self._draw("#pnl", render_pnl_chart, pos, hist)
         und = self._draw("#under", render_underlying_chart, pos, hist, closes)
         iv = self._draw("#ivrv", render_iv_chart, pos, hist)
-        self.current_chart_text = pnl + und + iv
+        hl = self._draw("#health", render_health_chart, pos)
+        self.current_chart_text = pnl + und + iv + hl
 
     def _draw(self, sel: str, fn, *args) -> str:
         w = self.query_one(sel, Static)

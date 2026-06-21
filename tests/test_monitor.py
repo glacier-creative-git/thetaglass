@@ -12,7 +12,8 @@ from rich.console import Console
 from thetaglass.mock import MOCK_PREFIX, closes_from_history, make_mock_book, make_mock_position
 from thetaglass.state.volatility import realized_vol, rv_series
 from thetaglass.view.cards import render_position_card
-from thetaglass.view.chart import render_iv_chart, render_pnl_chart, render_underlying_chart
+from thetaglass.view.chart import (render_health_chart, render_iv_chart, render_pnl_chart,
+                                   render_underlying_chart)
 from thetaglass.view.monitor import MonitorApp
 
 BRAILLE = range(0x2800, 0x28FF + 1)
@@ -54,15 +55,16 @@ def test_pnl_chart_renders_cone():
     assert "on-track" in s and "max loss" in s          # the cone legend
 
 
-def test_pnl_chart_backfills_gap_in_blue():
-    # started watching 4 days after open → a blue backfill bridge is drawn + keyed
+def test_pnl_chart_unrealized_line_is_blue():
+    # the position is open, so it's UNrealized (mark-to-market) P/L — one blue line, with
+    # the pre-watch bridge merged in (no separate green "realized" vs blue "backfill").
+    BLUE = "\x1b[38;2;95;150;245m"
     pos, hist = make_mock_position(synced_after=4)
     assert min(h["dte_remaining"] for h in hist) < pos["dte_at_open"]  # history starts late
     s = render_pnl_chart(pos, hist, width=90, height=18)
-    assert "backfill" in s
-    # contiguous history (watched from open) → no backfill line
-    pos2, hist2 = make_mock_position(synced_after=0)
-    assert "backfill" not in render_pnl_chart(pos2, hist2, width=90, height=18)
+    assert "unrealized P/L" in s and BLUE in s
+    assert "realized P/L" not in s.replace("unrealized P/L", "")   # not labeled "realized"
+    assert "backfill" not in s          # the word is retired; it's all just blue now
 
 
 def test_underlying_chart_shows_edges():
@@ -72,6 +74,35 @@ def test_underlying_chart_shows_edges():
     assert "UNDERLYING" in s and pos["underlying"] in s
     # the profit-% edge cone (BS run backwards), not flat strike lines
     assert "max-profit edge" in s and "90% (max) profit" in s and "break-even 0%" in s
+
+
+def test_health_chart_is_snapshot_scoreboard():
+    pos, _ = make_mock_position()
+    s = render_health_chart(pos, width=66, height=14)
+    assert "HEALTH" in s and f"{pos['health_score']:.2f}" in s   # compact number, not a banner
+    # the three axes, each labeled with its blend weight (the weighting made explicit)
+    assert "θ-track" in s and "strike" in s and "iv" in s
+    assert "40%" in s and "20%" in s
+    assert "weakest" in s                       # the dragging axis is flagged
+    assert "weakest-link" in s                  # the floor rule footnote
+
+
+def test_health_chart_flags_a_floored_axis():
+    # a price breach: strike axis goes critical, so the whole score is floored to it
+    pos, _ = make_mock_position()
+    pos = {**pos, "health_score": 0.06,
+           "health_axes": {"theta_on_track": 0.82, "strike_distance": 0.06,
+                           "iv_stability": 0.71}}
+    s = render_health_chart(pos, width=66, height=14)
+    assert "CRITICAL" in s and "floored by strike" in s
+    # red (C_BAD) is used for the breached axis; green (C_HEALTHY) for the healthy ones
+    assert "\x1b[38;2;220;100;100m" in s and "\x1b[38;2;95;205;130m" in s
+
+
+def test_health_chart_handles_missing_axes():
+    pos, _ = make_mock_position()
+    s = render_health_chart({**pos, "health_score": None, "health_axes": None})
+    assert "unavailable" in s
 
 
 def test_card_contains_key_metrics():
