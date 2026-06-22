@@ -8,6 +8,10 @@
   <em>An hourglass for theta decay.</em>
 </p>
 
+<p align="center">
+  <img src="assets/thetaglass-monitor.png" alt="tg monitor — the per-position drill-down" width="820">
+</p>
+
 > A self-hosted watchdog for **sold** options. It tracks each credit spread against its
 > own decay curve — computing how far along it *should* be vs. where it actually is,
 > scoring position health, and surfacing it on its own clock. Robinhood gives you the
