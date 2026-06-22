@@ -98,27 +98,41 @@ def _hourglass(g, cx, cy, ax_in, ay_in, fy, neck, margin) -> None:
 
 
 def _sand(g, cx, cy, ax_in, ay_in, fill_top, fill_bottom, side_m, neck_gap, fy, neck, margin):
-    """Dense sand floating inside each chamber. fill_top/fill_bottom (0..1) set how full each
-    chamber is; the top surface drops as it drains, the bottom pile rises as it fills. The
-    lateral gap to the glass walls (side_m) is fixed and never changes with the fill."""
+    """Dense sand inside each chamber, plus the glass plates that cap both ends.
+
+    fill_top/fill_bottom (0..1) set how full each chamber is: the top surface drops as it
+    drains, the bottom pile rises as it fills. The plates at the far top and far bottom are
+    fixed glass — drawn every frame — so a drained chamber still reads as a capped vessel
+    rather than an open funnel, and a fully-empty top leaves no stray sand by the neck. The
+    lateral gap to the walls (side_m) never changes with the fill."""
     top_y, bot_y = cy - fy * ay_in, cy + fy * ay_in
     w_end = ax_in * math.sqrt(1 - fy * fy) - margin
     half = fy * ay_in
 
-    def fill(y0, y1):
-        yy = int(round(y0))
-        while yy <= int(round(y1)):
-            inner = _hw(yy, cy, half, neck, w_end) - side_m
-            if inner > 0:
-                for xx in range(int(round(cx - inner)), int(round(cx + inner)) + 1):
-                    if 0 <= yy < len(g) and 0 <= xx < len(g[0]):
-                        g[yy][xx] = 1
-            yy += 1
+    def span(yy, half_w):
+        y = int(round(yy))
+        if half_w > 0:
+            for xx in range(int(round(cx - half_w)), int(round(cx + half_w)) + 1):
+                if 0 <= y < len(g) and 0 <= xx < len(g[0]):
+                    g[y][xx] = 1
 
+    def row(yy):                # a sand row, inset from the walls by the fixed side gap
+        span(yy, _hw(int(round(yy)), cy, half, neck, w_end) - side_m)
+
+    def fill(y0, y1):
+        for yy in range(int(round(y0)), int(round(y1)) + 1):
+            row(yy)
+
+    # glass plates: the fixed top and bottom of the vessel. Unlike the sand, these run flush
+    # to the walls (no side gap), so the four corners close where cap meets wall — no daylight.
+    span(top_y, _hw(int(round(top_y)), cy, half, neck, w_end))
+    span(bot_y, _hw(int(round(bot_y)), cy, half, neck, w_end))
     top_lo = cy - neck_gap
-    fill(top_y + (1 - fill_top) * (top_lo - top_y), top_lo)      # top: surface drops
+    if fill_top > 0:            # top: sand recedes toward the neck as it drains
+        fill(top_y + (1 - fill_top) * (top_lo - top_y), top_lo)
     bot_hi = cy + neck_gap
-    fill(bot_y - fill_bottom * (bot_y - bot_hi), bot_y)          # bottom: pile rises
+    if fill_bottom > 0:         # bottom: pile rises from the floor
+        fill(bot_y - fill_bottom * (bot_y - bot_hi), bot_y)
 
 
 def _build(geo, fill_top, fill_bottom) -> list[str]:

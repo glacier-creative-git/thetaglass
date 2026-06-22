@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+gif = ["pillow>=10"]   # docs tooling only: regenerate assets/thetaglass-logo.gif
 
 [project.scripts]
 tg = "thetaglass.cli:app"
